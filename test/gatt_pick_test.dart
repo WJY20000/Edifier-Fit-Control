@@ -61,19 +61,21 @@ void main() {
     expect(candidates.first.notifyService, _svc('48097304'));
   });
 
-  test('只有标准 GATT 服务时也不会崩，按原顺序给候选', () {
-    final candidates = BleController.gattCandidates([_batteryService]);
+  test('只有标准 GATT 服务时也不会崩，仍然给出候选（分数低）', () {
+    final standard = BleService('0000180f-0000-1000-8000-00805f9b34fb', [
+      _ch('00002a19-0000-1000-8000-00805f9b34fb', const [
+        CharacteristicProperty.read,
+        CharacteristicProperty.notify,
+        CharacteristicProperty.write,
+      ]),
+    ]);
+    final candidates = BleController.gattCandidates([standard]);
     expect(candidates, hasLength(1));
     expect(candidates.first.notify, '00002a19-0000-1000-8000-00805f9b34fb');
+    expect(candidates.first.write, '00002a19-0000-1000-8000-00805f9b34fb');
   });
 
   test('没有可写特征时返回空列表', () {
-    final services = [
-      BleService('0000180f-0000-1000-8000-00805f9b34fb', [
-        _ch('00002a19-0000-1000-8000-00805f9b34fb',
-            const [CharacteristicProperty.read, CharacteristicProperty.notify]),
-      ]),
-    ];
-    expect(BleController.gattCandidates(services), isEmpty);
+    expect(BleController.gattCandidates([_batteryService]), isEmpty);
   });
 }

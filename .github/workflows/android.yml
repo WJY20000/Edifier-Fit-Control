@@ -41,89 +41,122 @@ jobs:
       - name: Generate Android platform folder
         run: dart tool/bootstrap.dart --platforms=android
 
-      # bootstrap 里已经改过一次；这里再无条件改一次并打印结果，
-      # 免得因为仓库里的 android/ 是旧的、或者模板又换回 GitHub Releases，
-      # 最后又去吃 504。
-      # 注意：services.gradle.org 现在 307 跳到 GitHub Releases，
-      # 重试也还是那条会 504 的链路，所以这里固定用 downloads.gradle.org。
-      - name: Point Gradle wrapper at the official CDN
+      # Gradle 分发包的下载是这一串红灯的根源：
+      #   * 模板默认指向 services.gradle.org（可能 307 到 GitHub Releases，
+      #     而 GitHub 的 release 资源会回 504）；
+      #   * Github 一旦抖动，wrapper 直接失败。
+      # 这里不再猜哪个源一定能用：先测原 URL，不通就换一个能通的镜像，
+      # 然后把分发包**预先解压到 wrapper 缓存目录**，构建时完全不需要联网。
+      - name: Prepare Gradle distribution (offline cache)
         shell: bash
         run: |
           set -euo pipefail
           props=android/gradle/wrapper/gradle-wrapper.properties
           if [ ! -f "$props" ]; then
-            echo "找不到 $props（bootstrap 没有生成 android/）" >&2
+            echo "::error::找不到 $props（bootstrap 没有生成 android/）"
             exit 1
           fi
-          echo "--- bootstrap 之后 ---"
+
+          echo "--- 模板原始配置 ---"
           cat "$props"
-          version=$(grep -oE 'gradle-[0-9][0-9.]*(-(all|bin))?\.zip' "$props" | head -1 | sed -E 's/^gradle-([0-9][0-9.]*).*/\1/')
-          if [ -z "${version:-}" ]; then
-            version=9.3.1
+
+          # properties 里冒号写成 https\\:// —— 先把反斜杠去掉，才是真正的 URL
+          raw=$(grep -E '^[[:space:]]*distributionUrl' "$props" | head -1 | sed -E 's/^[^=]*=[[:space:]]*//' | tr -d '\\')
+          echo "原始 distributionUrl: $raw"
+          file=$(basename "${raw%%\?*}")
+          version=$(printf '%s' "$file" | sed -E 's/^gradle-([0-9][0-9.]*)-(all|bin)\.zip$/\1/')
+          echo "Gradle 版本: ${version} / 分发包: ${file}"
+          if [ -z "${version:-}" ] || [ "$version" = "$file" ]; then
+            echo "::error::无法从 $raw 解析 Gradle 版本"
+            exit 1
           fi
-          url="https://downloads.gradle.org/distributions/gradle-${version}-bin.zip"
-          {
-            echo 'distributionBase=GRADLE_USER_HOME'
-            echo 'distributionPath=wrapper/dists'
-            echo 'zipStoreBase=GRADLE_USER_HOME'
-            echo 'zipStorePath=wrapper/dists'
-            echo "distributionUrl=${url//:/\\:}"
-            echo 'networkTimeout=120000'
-            echo 'retries=5'
-            echo 'retryBackOffMs=3000'
-          } > "$props"
-          echo "--- 改写之后（Gradle ${version}）---"
+
+          code_of() {
+            curl -s -o /dev/null -w '%{http_code}' -L --max-time 45 \
+              --retry 1 --retry-delay 2 "$1" 2>/dev/null || echo 000
+          }
+
+          url="$raw"
+          code=$(code_of "$raw")
+          echo "原始地址 HTTP $code"
+          if [ "$code" != "200" ]; then
+            for host in downloads.gradle.org services.gradle.org; do
+              cand="https://${host}/distributions/${file}"
+              c=$(code_of "$cand")
+              echo "候选 $cand -> HTTP $c"
+              if [ "$c" = "200" ]; then
+                url="$cand"
+                break
+              fi
+            done
+          fi
+          echo "最终使用: $url"
+
+          # 写回 properties（冒号按 Java properties 的规矩转义）
+          esc=${url//:/\\:}
+          URL_ESC="$esc" python3 - "$props" <<'PY'
+          import os, re, sys
+          path = sys.argv[1]
+          text = open(path, encoding="utf-8").read()
+          url = os.environ["URL_ESC"]
+          text = re.sub(r'^[ \t]*distributionUrl.*$', 'distributionUrl=' + url, text, flags=re.M)
+          if 'networkTimeout=' not in text:
+              text = text.rstrip() + '\nnetworkTimeout=120000\n'
+          if 'retries=' not in text:
+              text = text.rstrip() + '\nretries=5\n'
+          if 'retryBackOffMs=' not in text:
+              text = text.rstrip() + '\nretryBackOffMs=3000\n'
+          open(path, 'w', encoding="utf-8").write(text)
+          PY
+          echo "--- 改写后 ---"
           cat "$props"
-          grep -q 'downloads.gradle.org' "$props"
 
-      # 把分发包直接放进 wrapper 的缓存目录，构建时就不需要再下载了。
-      # 缓存路径 = <GRADLE_USER_HOME>/wrapper/dists/gradle-<ver>-bin/<md5(url) 的 base36>，
-      # 和 Gradle 的 PathAssembler 一致；失败也不影响后面的构建（只是退化成在线下载）。
-      - name: Pre-seed the Gradle distribution (best effort)
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          props=android/gradle/wrapper/gradle-wrapper.properties
-          version=$(grep -oE 'gradle-[0-9][0-9.]*(-(all|bin))?\.zip' "$props" | head -1 | sed -E 's/^gradle-([0-9][0-9.]*).*/\1/')
-          url="https://downloads.gradle.org/distributions/gradle-${version}-bin.zip"
+          # Gradle 的缓存路径 = <GRADLE_USER_HOME>/wrapper/dists/<zip 名>/<md5(url) 的 base36>
           hash=$(python3 - "$url" <<'PY'
-          import hashlib
-          import sys
-
-          number = int.from_bytes(hashlib.md5(sys.argv[1].encode('utf-8')).digest(), 'big')
-          alphabet = '0123456789abcdefghijklmnopqrstuvwxyz'
-          out = ''
-          while number:
-              number, rest = divmod(number, 36)
-              out = alphabet[rest] + out
-          print(out or '0')
+          import hashlib, sys
+          n = int.from_bytes(hashlib.md5(sys.argv[1].encode("utf-8")).digest(), "big")
+          alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+          out = ""
+          while n:
+              n, r = divmod(n, 36)
+              out = alphabet[r] + out
+          print(out or "0")
           PY
           )
-          root="${GRADLE_USER_HOME:-$HOME/.gradle}/wrapper/dists/gradle-${version}-bin/${hash}"
-          echo "预热目录：$root"
+          root="${GRADLE_USER_HOME:-$HOME/.gradle}/wrapper/dists/${file%.zip}/${hash}"
+          echo "缓存目录: $root"
           mkdir -p "$root"
-          zip="$root/gradle-${version}-bin.zip"
+
           ok=0
-          # services.gradle.org 会 307 到 GitHub Releases（就是 504 的来源），
-          # 所以只试 Gradle 自己的 CDN；两个域名都指同一个对象存储，互为备份。
-          for host in downloads.gradle.org services.gradle.org; do
+          for src in "$url" "https://downloads.gradle.org/distributions/${file}" "https://services.gradle.org/distributions/${file}"; do
             if curl -fL --retry 4 --retry-all-errors --retry-delay 3 \
-                --connect-timeout 20 --max-time 600 \
-                -o "$zip" "https://${host}/distributions/gradle-${version}-bin.zip"; then
-              echo "下载成功：$host"
+                --connect-timeout 20 --max-time 900 \
+                -o "$root/$file" "$src"; then
+              echo "下载成功: $src ($(du -h "$root/$file" | cut -f1))"
               ok=1
               break
             fi
+            echo "下载失败: $src"
           done
           if [ "$ok" != "1" ]; then
-            echo "下载失败，跳过预热（构建时 wrapper 会自己重试）"
+            echo "::warning::预热失败，构建时由 wrapper 自行下载（已开启 retries=5）"
             exit 0
           fi
-          rm -rf "${root}/gradle-${version}"
-          unzip -q "$zip" -d "$root"
-          rm -f "$zip"
-          touch "${root}/gradle-${version}-bin.zip.ok"
+
+          # 解压出来的顶层目录名不一定是 zip 名（-all 包里面是 gradle-<版本>），
+          # 所以先清空、解压、再检查「恰好一个目录 + 里面有启动器 jar」。
+          find "$root" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
+          unzip -q "$root/$file" -d "$root"
+          rm -f "$root/$file"
+          dirs=$(find "$root" -mindepth 1 -maxdepth 1 -type d | wc -l)
+          launcher=$(find "$root" -name 'gradle-launcher-*.jar' | head -1)
+          if [ "$dirs" != "1" ] || [ -z "$launcher" ]; then
+            echo "::error::解压结果不像一个 Gradle 发行包（目录数 $dirs，启动器 jar: ${launcher:-无}）"
+            ls -la "$root"
+            exit 1
+          fi
+          touch "$root/$file.ok"
+          echo "预热完成：$root"
           ls -la "$root"
 
       - name: Resolve dependencies
@@ -132,16 +165,32 @@ jobs:
       - name: Build release APK (arm64-v8a)
         shell: bash
         run: |
-          echo "--- 构建时实际使用的 wrapper 配置 ---"
+          set -o pipefail
+          echo "--- 构建时使用的 wrapper 配置 ---"
           cat android/gradle/wrapper/gradle-wrapper.properties
-          # wrapper 现在也会自己重试（retries=5）；这里再兜一层，防止极端抖动。
+          echo "--- 环境 ---"
+          flutter --version | head -3 || true
+          java -version 2>&1 | head -2 || true
+          df -h / | tail -1 || true
+
           for attempt in 1 2 3; do
-            if flutter build apk --release --target-platform android-arm64; then
+            log="/tmp/build_${attempt}.log"
+            if flutter build apk --release --target-platform android-arm64 2>&1 | tee "$log"; then
               echo "APK 构建成功（第 $attempt 次尝试）"
               exit 0
             fi
+            echo "APK 构建失败（第 $attempt 次尝试）"
+            # 把真正的失败原因以注解形式发出来：即使完整日志抓不到，
+            # 也能从 GitHub 的 annotations 里直接看到。
+            n=0
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-600)"
+              n=$((n + 1))
+              if [ "$n" -ge 6 ]; then break; fi
+            done < <(grep -aE "FAILURE:|What went wrong|Caused by:|^error:|Execution failed|Could not (resolve|find|download|determine)|FileNotFoundException|OutOfMemory|No space left|SDK location|Unsupported class file|Could not create service" "$log" | head -6 || true)
             delay=$((attempt * 20))
-            echo "APK 构建失败（第 $attempt 次尝试），${delay}s 后重试…"
+            echo "${delay}s 后重试…"
             sleep "$delay"
           done
           echo "连续 3 次构建失败，放弃。"

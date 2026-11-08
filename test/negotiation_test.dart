@@ -376,6 +376,30 @@ void main() {
     await device.close();
   }, timeout: const Timeout(Duration(seconds: 40)));
 
+  test('重复点深度探测：并发也只跑一轮，结果不会被互相打断', () async {
+    final device = FakeHeadset();
+    final engine = EdifierEngine(link: device, profile: Profiles.fit900nbTurbo);
+    engine.start();
+
+    // 用户连点两下「深度探测」。
+    final results = await Future.wait([
+      engine.negotiate(deepProbe: true),
+      engine.negotiate(deepProbe: true),
+    ]);
+
+    expect(results.every((r) => r.ok), isTrue);
+    expect(engine.framing, Framing.v2);
+    expect(engine.anc, AncDialect.slotFit900);
+    expect(engine.state.battery, 45);
+
+    // 协商完之后控制项仍然可用（以前第二次探测会把状态改坏）。
+    expect(await engine.setNoise(NoiseMode.off), isTrue);
+    expect(engine.state.noise, NoiseMode.off);
+
+    await engine.dispose();
+    await device.close();
+  });
+
   test('完全不应答的设备：协商失败但可安全释放', () async {
     final device = FakeHeadset(silent: true);
     final engine = EdifierEngine(link: device, profile: Profiles.fit900nbTurbo);

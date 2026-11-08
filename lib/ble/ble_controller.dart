@@ -334,23 +334,72 @@ class BleController {
   /// 再重连一次；配不上也只是原样报错。
   Future<List<EdifierGatt>> connectCandidates(
     String deviceId, {
-    Duration timeout = const Duration(seconds: 20),
+    Duration timeout = const Duration(seconds: 12),
   }) async {
     await stopScan();
-    try {
-      return await _connectOnce(deviceId, timeout);
-    } catch (error) {
-      if (!needsPairing(error)) rethrow;
-      if (kDebugMode) debugPrint('[ble] AccessDenied, pairing then retrying: $error');
-      // 上一次失败可能留下半开连接，先收干净再重来。
+    Object? lastError;
+    var paired = false;
+
+    for (var attempt = 1; attempt <= 3; attempt++) {
       try {
-        await UniversalBle.disconnect(deviceId);
-      } catch (_) {}
-      await pair(deviceId);
-      // 系统配对完成后链路要几百毫秒才稳定，太急会又拿到 AccessDenied。
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-      return _connectOnce(deviceId, timeout);
+        // 开连之前先看一眼系统里的状态：上一个进程如果不是干净退出的，
+        // Windows 会留一个半开的连接，新的 connect 会一直卡到超时
+        // （真机上的 `TimeoutException after 0:00:20: Future not completed`）。
+        if (attempt == 1) {
+          final state = await _connectionState(deviceId);
+          if (state == BleConnectionState.connected ||
+              state == BleConnectionState.connecting) {
+            if (kDebugMode) debugPrint('[ble] 残留连接（$state），先断开');
+            try {
+              await UniversalBle.disconnect(deviceId);
+            } catch (_) {}
+            await Future<void>.delayed(const Duration(milliseconds: 500));
+          }
+        } else {
+          // 失败后把可能留下的半开连接收干净，等一会儿再重来。
+          try {
+            await UniversalBle.disconnect(deviceId);
+          } catch (_) {}
+          await Future<void>.delayed(Duration(milliseconds: 500 * attempt));
+        }
+        return await _connectOnce(deviceId, timeout);
+      } catch (error) {
+        lastError = error;
+        if (kDebugMode) debugPrint('[ble] 连接失败（第 $attempt 次）：$error');
+        if (needsPairing(error) && !paired) {
+          paired = true;
+          await pair(deviceId);
+          // 系统配对完成后链路要几百毫秒才稳定，太急会又拿到 AccessDenied。
+          await Future<void>.delayed(const Duration(milliseconds: 700));
+          continue;
+        }
+        if (!_isRetriable(error) || attempt == 3) rethrow;
+      }
     }
+    throw lastError ?? StateError('connect failed');
+  }
+
+  /// 读一次系统里的连接状态；拿不到就当作未知（返回 null）。
+  Future<BleConnectionState?> _connectionState(String deviceId) async {
+    try {
+      return await UniversalBle.getConnectionState(
+        deviceId,
+        timeout: const Duration(seconds: 3),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 这类错误重试一次往往就好了（Windows 的 GATT 偶发卡住 / 超时）。
+  static bool _isRetriable(Object error) {
+    final text = '$error'.toLowerCase();
+    return text.contains('timeout') ||
+        text.contains('timed out') ||
+        text.contains('future not completed') ||
+        text.contains('unreachable') ||
+        text.contains('failed to connect') ||
+        text.contains('connection failed');
   }
 
   /// 只要最可信的那个通道（旧接口，保留给调用方）。

@@ -34,5 +34,24 @@ jobs:
       - name: Resolve dependencies
         run: flutter pub get
 
+      # 失败时把「哪个测试挂了 + 第一段异常」以注解形式发出来：
+      # GitHub 的 job 日志托管在 Azure，外部工具经常抓不到，
+      # 而 annotations 是可以通过 API 读到的。
       - name: Run tests
-        run: flutter test --reporter expanded
+        shell: bash
+        run: |
+          set -o pipefail
+          log=/tmp/test.log
+          if flutter test --reporter expanded 2>&1 | tee "$log"; then
+            echo "全部测试通过"
+            exit 0
+          fi
+          echo "::error::flutter test 失败，下面是从日志里提取的关键行"
+          n=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-600)"
+            n=$((n + 1))
+            if [ "$n" -ge 10 ]; then break; fi
+          done < <(grep -aE "\[E\]|Expected:|Actual:|which:|Error:|error:|The following|Failed to load|Failing tests" "$log" | head -10 || true)
+          exit 1

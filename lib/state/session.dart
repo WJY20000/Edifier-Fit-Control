@@ -243,7 +243,17 @@ class Session extends ChangeNotifier {
   Future<void> connectTo(String id, String? name, {required bool auto}) async {
     if (phase == SessionPhase.connecting) return;
     if (BleController.sameAddress(deviceId, id) && connected) return;
+    final previousId = deviceId;
     await _teardown(keepDevice: false);
+    if (previousId != null && !BleController.sameAddress(previousId, id)) {
+      // 换一台设备时把旧链路断干净：Windows 不会替我们回收，
+      // 留着它会让新连接一直卡到超时。
+      try {
+        await ble.disconnect(previousId).timeout(const Duration(seconds: 3));
+      } catch (_) {
+        // 旧链路本来就已经断了。
+      }
+    }
     phase = SessionPhase.connecting;
     deviceId = id;
     deviceName = name;
@@ -427,8 +437,16 @@ class Session extends ChangeNotifier {
   Future<void> probeNow() async {
     final edifier = engine;
     if (edifier == null) return;
-    _negotiation = await edifier.negotiate(deepProbe: true);
-    notifyListeners();
+    // 和控制命令共用一条队列：探测期间点选项会排队，不会两边抢通道。
+    await _serialized(() async {
+      try {
+        _negotiation = await edifier.negotiate(deepProbe: true);
+      } catch (error) {
+        lastError = '$error';
+      }
+      notifyListeners();
+      return true;
+    });
   }
 
   Future<void> refreshBattery() async {
@@ -436,38 +454,100 @@ class Session extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 控制命令的串行队列。
+  ///
+  /// 用户连点两个选项时，两条写入/读回会交错：读回可能拿到上一条命令的回包，
+  /// 于是界面显示「失败」，设备其实已经改了。这里让控制命令一条一条来。
+  Future<void> _controlQueue = Future<void>.value();
+
+  Future<bool> _serialized(Future<bool> Function() task) {
+    final previous = _controlQueue;
+    final done = Completer<void>();
+    _controlQueue = done.future;
+    return previous.then((_) => task()).whenComplete(() => done.complete());
+  }
+
+  /// 上一次「失败后自动重新协商」的时间，避免每次点击都触发一轮探测。
+  DateTime? _lastHeal;
+
+  /// 先按当前协商结果执行；失败就自动重谈一次再试一遍。
+  ///
+  /// 真机上出现过「刚连上时点选项没反应，点一次深度探测之后就好了」：
+  /// 说明那次协商结果不可用（回包丢了 / 通知还没订阅上）。
+  /// 与其让用户自己去找「深度探测」，不如失败时自动补一次。
+  Future<bool> _runOrHeal(Future<bool> Function(EdifierEngine engine) action) async {
+    final edifier = engine;
+    if (edifier == null) return false;
+    // 链路抖一下时写 GATT 可能直接抛异常，别让它变成未捕获错误。
+    try {
+      if (await action(edifier)) return true;
+    } catch (_) {
+      // 当作失败，下面走自动重谈。
+    }
+    // 链路已经断了就别再折腾探测了，直接报错让用户重连。
+    if (!connected) return false;
+
+    final now = DateTime.now();
+    final cooling = _lastHeal != null &&
+        now.difference(_lastHeal!) < const Duration(seconds: 12);
+    if (cooling) return false;
+    _lastHeal = now;
+    try {
+      // 已验证的型号才敢自动发「未验证的控制命令」；未验证的型号只做一次轻量重谈，
+      // 免得为了修一个控件而对未知固件乱发命令（部分型号会直接掉线）。
+      _negotiation = await edifier.negotiate(deepProbe: profile.verified);
+    } catch (_) {
+      return false;
+    }
+    notifyListeners();
+    try {
+      return await action(edifier);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> setNoise(NoiseMode mode) async {
-    final ok = await engine?.setNoise(mode) ?? false;
-    if (!ok) lastError = l10n.t('common.failed');
+    final ok = await _serialized(() => _runOrHeal((engine) => engine.setNoise(mode)));
+    // 成功就清掉上一次的「操作失败」：以前这条提示会一直挂在页面上，
+    // 用户明明点成功了，下面还写着失败，看起来像没生效。
+    lastError = ok ? null : l10n.t('common.failed');
     notifyListeners();
     return ok;
   }
 
   Future<bool> setAmbientLevel(int level) async {
-    final ok = await engine?.setAmbientLevel(level) ?? false;
-    // 之前这里失败是静默的：界面停在旧档位，用户不知道是没发出去还是被拒绝。
-    if (!ok) lastError = l10n.t('common.failed');
+    final ok = await _serialized(() => _runOrHeal((engine) => engine.setAmbientLevel(level)));
+    // 以前这里失败是静默的：界面停在旧档位，用户不知道是没发出去还是被拒绝。
+    // 成功则清掉上一次的「操作失败」，别让旧提示一直挂着。
+    lastError = ok ? null : l10n.t('common.failed');
     notifyListeners();
     return ok;
   }
 
   Future<bool> setScene(int value) async {
-    final ok = await engine?.setScene(value) ?? false;
-    if (!ok) lastError = l10n.t('common.failed');
+    final ok = await _serialized(() => _runOrHeal((engine) => engine.setScene(value)));
+    // 成功就清掉上一次的「操作失败」：以前这条提示会一直挂在页面上，
+    // 用户明明点成功了，下面还写着失败，看起来像没生效。
+    lastError = ok ? null : l10n.t('common.failed');
     notifyListeners();
     return ok;
   }
 
   Future<bool> setLdac(int value) async {
-    final ok = await engine?.setLdac(value) ?? false;
-    if (!ok) lastError = l10n.t('common.failed');
+    final ok = await _serialized(() => _runOrHeal((engine) => engine.setLdac(value)));
+    // 成功就清掉上一次的「操作失败」：以前这条提示会一直挂在页面上，
+    // 用户明明点成功了，下面还写着失败，看起来像没生效。
+    lastError = ok ? null : l10n.t('common.failed');
     notifyListeners();
     return ok;
   }
 
   Future<bool> setSoundEffect(int value) async {
-    final ok = await engine?.setSoundEffect(value) ?? false;
-    if (!ok) lastError = l10n.t('common.failed');
+    final ok = await _serialized(() => _runOrHeal((engine) => engine.setSoundEffect(value)));
+    // 成功就清掉上一次的「操作失败」：以前这条提示会一直挂在页面上，
+    // 用户明明点成功了，下面还写着失败，看起来像没生效。
+    lastError = ok ? null : l10n.t('common.failed');
     notifyListeners();
     return ok;
   }
@@ -514,11 +594,24 @@ class Session extends ChangeNotifier {
     } catch (_) {
       // 扫描没开或已经停了，不影响退出。
     }
+    final id = deviceId;
+    // 先把「系统层面的断开」发出去：进程退出后 Windows 不会替我们收尾，
+    // 残留的半开连接会让下次启动直接卡到超时（TimeoutException: 20s）。
+    // 以前这里先做 Dart 侧清理、再断链，总共只给 2 秒，经常断到一半就 exit 了。
+    if (id != null) {
+      try {
+        await ble.disconnect(id).timeout(const Duration(seconds: 5));
+      } catch (_) {
+        // 本来就没连上 / 超时，忽略。
+      }
+    }
+    _intentionalDisconnect = true;
     try {
-      // 关窗口时别让用户干等：最多 2 秒，之后直接结束进程。
-      await disconnect().timeout(const Duration(seconds: 2));
+      await _teardown(keepDevice: true).timeout(const Duration(seconds: 2));
     } catch (_) {
-      // 连接本来就断了 / 超时了，忽略。
+      // 清理慢一点也没关系，进程马上就结束了。
+    } finally {
+      _intentionalDisconnect = false;
     }
   }
 

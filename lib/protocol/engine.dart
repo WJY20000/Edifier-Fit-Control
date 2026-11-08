@@ -195,11 +195,49 @@ class EdifierEngine {
   /// 裸发一帧（实验室用），不等待。
   Future<void> sendRaw(int command, List<int> payload) => _write(command, payload);
 
+  /// 正在进行的协商。重复点「深度探测」不会并发跑两轮：
+  /// 两次协商交错发命令会让 `framing` / `anc` 互相覆盖，
+  /// 收尾时还可能把已经能用的状态改坏（真机上表现为「探测之后反而全都失败」）。
+  Future<NegotiationResult>? _negotiating;
+  bool _negotiatingDeep = false;
+
   /// 协商：先用哪些帧格式、再定降噪方言。
   ///
   /// [deepProbe] 为 true 时才会去试探降噪 / EQ / LDAC 等命令；
   /// 默认关闭，避免向未知固件发送不认识的控制字（部分型号会直接掉线）。
-  Future<NegotiationResult> negotiate({bool deepProbe = false}) async {
+  Future<NegotiationResult> negotiate({bool deepProbe = false}) {
+    final running = _negotiating;
+    if (running != null) {
+      if (!deepProbe || _negotiatingDeep) {
+        _info('已有协商在进行，直接复用这次结果');
+        return running;
+      }
+      // 正在跑的是「轻量协商」，而用户按的是「深度探测」：
+      // 不能把轻量结果当成深度结果返回（界面上就是按了没反应），
+      // 等它结束再补一次完整的。
+      _info('轻量协商进行中，结束后继续做深度探测');
+      return running.then((_) => negotiate(deepProbe: true));
+    }
+    late Future<NegotiationResult> future;
+    _negotiatingDeep = deepProbe;
+    future = _negotiate(deepProbe: deepProbe).whenComplete(() {
+      if (identical(_negotiating, future)) {
+        _negotiating = null;
+        _negotiatingDeep = false;
+      }
+    });
+    _negotiating = future;
+    return future;
+  }
+
+  Future<NegotiationResult> _negotiate({bool deepProbe = false}) async {
+    // 记下上一次「谈成功」的状态：重新探测失败时原样保留，
+    // 不能因为一次超时就把已经能用的控件弄坏。
+    final wasReady = ready;
+    final prevFraming = framing;
+    final prevAnc = anc;
+    final prevCaps = caps.copy();
+    final prevBattery = state.battery;
     ready = false;
     // 把通道写进日志：万一还是「无应答」，一眼就能看出是不是选错了服务。
     _info(
@@ -215,6 +253,25 @@ class EdifierEngine {
         '电池查询无应答，协商失败（本次共收到 $receivedFrames 帧通知'
         '${receivedFrames == 0 ? '：一帧都没有，先查通道和订阅' : ''}）',
       );
+      if (wasReady) {
+        // 之前是好的：回滚，保持可用。
+        framing = prevFraming;
+        anc = prevAnc;
+        caps.restore(prevCaps);
+        state.battery = prevBattery;
+        ready = true;
+        _info('保留上一次可用的协商结果（${prevFraming.label}），控件不会消失');
+        return NegotiationResult(
+          ok: true,
+          framing: framing,
+          responseHead: responseHead,
+          serviceUuid: serviceUuid,
+          writeUuid: writeUuid,
+          notifyUuid: notifyUuid,
+          anc: anc,
+          error: 're-probe failed, kept the previous working setup',
+        );
+      }
       return NegotiationResult(
         ok: false,
         framing: framing,
@@ -321,6 +378,22 @@ class EdifierEngine {
         decided = Framing.v2Xor;
       } else if (plainLooksText) {
         decided = Framing.v2;
+      }
+    }
+    // 从「明文」切成「异或」是个危险操作：一旦切错，之后所有命令都会失败
+    // （真机上就表现为「点一次深度探测之后，选项全部失灵」）。
+    // 单个回包有可能被误判，所以切过去之后再读一次设备名做验证：
+    // 真异或的设备会回可读文本，明文设备被我们异或之后就是乱码。
+    if (decided == Framing.v2Xor && assumed != Framing.v2Xor) {
+      framing = Framing.v2Xor;
+      final check = await request(
+        Op.nameGet,
+        timeout: const Duration(milliseconds: 800),
+      );
+      final confirmed = check != null && _looksLikeText(check.payload);
+      if (!confirmed) {
+        decided = Framing.v2;
+        _info('异或回读不像设备名，判为误判，退回明文');
       }
     }
     framing = decided;
@@ -509,14 +582,36 @@ class EdifierEngine {
         echo.payload[2] <= 3) {
       state.ambientLevel = echo.payload[2];
     }
-    final check = await request(
+    var check = await request(
       Op.noiseGet,
       payload: (anc.slot == null || anc == AncDialect.slotFit900)
           ? const <int>[]
           : <int>[anc.slot!],
       timeout: const Duration(milliseconds: 800),
     );
-    if (check == null) return false;
+    if (check == null) {
+      // Windows 上偶发丢一帧，重读一次再判断。
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      check = await request(
+        Op.noiseGet,
+        payload: (anc.slot == null || anc == AncDialect.slotFit900)
+            ? const <int>[]
+            : <int>[anc.slot!],
+        timeout: const Duration(milliseconds: 900),
+      );
+    }
+    if (check == null) {
+      // 写命令本身有回包 = 设备已经收下并执行了；读回只是确认。
+      // 真机上读回偶尔丢一帧，以前会直接报「操作失败」并且界面不动，
+      // 看起来像点了没反应。这里相信写入的回包。
+      if (echo != null) {
+        state.noise = mode;
+        _info('读回无应答，但写入已有回包，按已生效处理');
+        return true;
+      }
+      _info('设置降噪失败：写入和读回都没有回包');
+      return false;
+    }
     final decoded = anc.decode(check.payload);
     if (decoded == null) return false;
     state.noise = decoded;

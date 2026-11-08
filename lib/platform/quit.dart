@@ -20,5 +20,9 @@ Future<void> quitApp(Session session) async {
     await SystemNavigator.pop();
     return;
   }
+  // Windows 上断开 GATT 是异步的系统调用，插件把结果回传之前就 exit(0)，
+  // 系统那边可能还留着一个半开连接，下次启动会卡到 20 秒超时。
+  // 多等 350 ms 让它落地（总耗时仍然远小于「关不掉」的体验）。
+  await Future<void>.delayed(const Duration(milliseconds: 350));
   exit(0);
 }

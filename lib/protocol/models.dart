@@ -197,6 +197,28 @@ class Capabilities {
 
   bool get anyControl =>
       noise || scene || ldac || soundEffect || rename || powerOffTimer;
+
+  /// 快照。重新协商失败时用它回滚，避免把已经能用的控件弄没。
+  Capabilities copy() => Capabilities()
+    ..battery = battery
+    ..noise = noise
+    ..ambientLevel = ambientLevel
+    ..scene = scene
+    ..ldac = ldac
+    ..soundEffect = soundEffect
+    ..rename = rename
+    ..powerOffTimer = powerOffTimer;
+
+  void restore(Capabilities other) {
+    battery = other.battery;
+    noise = other.noise;
+    ambientLevel = other.ambientLevel;
+    scene = other.scene;
+    ldac = other.ldac;
+    soundEffect = other.soundEffect;
+    rename = other.rename;
+    powerOffTimer = other.powerOffTimer;
+  }
 }
 
 /// 设备当前状态（全部来自设备应答，不做乐观假设）。
