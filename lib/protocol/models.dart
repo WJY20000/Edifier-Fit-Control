@@ -27,9 +27,12 @@ enum AncDialect {
   /// 旧协议：[mode]，1 关 / 2 降噪 / 3 环境声。
   v1,
 
-  /// BES v2 槽位 0x1B：1 深度 / 2 舒适 / 3 ? / 4 防风 / 5 环境声 / 6 关。
+  /// BES v2 槽位 0x1B：1–3 都是降噪档（解码统一归到 [NoiseMode.deep]）、
+  /// 4 防风 / 5 环境声 / 6 关。
   ///
   /// 花再 Evo Pro、FitBuds Turbo 的真机记录；Fit900NB Turbo 尚未验证。
+  /// 注意：没有独立的「舒适」档 —— 早先的选项表里写了一个 value=2 的舒适，
+  /// 但它和「1–3 都是降噪」的记录冲突，已删除。
   slotEvo,
 
   /// BES v2 槽位 0x10：1 深度 / 2 舒适 / 3 防风 / 4 环境声 / 5 关（W860NB PRO）。
@@ -70,9 +73,10 @@ extension AncDialectX on AncDialect {
           NoiseOption(NoiseMode.off, AncV1.off, 'noise.off'),
         ];
       case AncDialect.slotEvo:
+        // 2 / 3 同样是降噪档（固件内部细分），UI 上不单独列；
+        // 解码时落到下面的 1–3 → deep 兜底。
         return const [
           NoiseOption(NoiseMode.deep, 1, 'noise.deep'),
-          NoiseOption(NoiseMode.comfort, 2, 'noise.comfort'),
           NoiseOption(NoiseMode.wind, 4, 'noise.wind'),
           NoiseOption(NoiseMode.ambient, 5, 'noise.ambient'),
           NoiseOption(NoiseMode.off, 6, 'noise.off'),

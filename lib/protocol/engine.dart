@@ -243,13 +243,28 @@ class EdifierEngine {
         Op.batteryGet,
         timeout: const Duration(milliseconds: 1200),
       );
-      if (frame != null && frame.payload.isNotEmpty && frame.payload[0] <= 100) {
-        state.battery = frame.payload[0];
-        caps.battery = true;
-        _info('帧格式确定为 ${candidate.label}，电量 ${state.battery}%');
-        await _refineFlavor();
-        return;
+      if (frame == null || frame.payload.isEmpty) continue;
+
+      var value = frame.payload[0];
+      var decided = candidate;
+      // 异或固件：这里还是按明文解，45% 会变成 45^0xA5=0x88（136），
+      // 超出 0..100 的合法电量范围。用同一个回包反推一次就知道了，
+      // 不必再发一遍命令（省一次往返，也避免某些固件对重复查询无应答）。
+      if (candidate != Framing.v1 && value > 100) {
+        final plain = value ^ EdifierCodec.payloadXor;
+        if (plain <= 100) {
+          value = plain;
+          decided = Framing.v2Xor;
+        }
       }
+      if (value > 100) continue;
+
+      framing = decided;
+      state.battery = value;
+      caps.battery = true;
+      _info('帧格式确定为 ${decided.label}，电量 ${state.battery}%');
+      await _refineFlavor();
+      return;
     }
     caps.battery = false;
   }
@@ -367,6 +382,19 @@ class EdifierEngine {
         state.ambientLevel = await _readAmbientLevelFit900() ?? state.ambientLevel;
       }
       _info('降噪方言确定为 ${dialect.name}（模式 ${mode.name}）');
+      return;
+    }
+    // 型号档案是真机验证过的、而且只有一个候选方言：即使这台固件不回 0xC1
+    // （老固件常见），也按档案采用它。否则整块降噪控件会凭空消失，
+    // 用户还以为软件坏了。
+    final known = profile.ancCandidates
+        .where((dialect) => dialect != AncDialect.none)
+        .toList();
+    if (profile.verified && known.length == 1) {
+      anc = known.first;
+      caps.noise = true;
+      caps.ambientLevel = known.first.supportsAmbientLevel;
+      _info('降噪查询无应答，按已验证档案采用 ${known.first.name}');
       return;
     }
     _info('降噪查询无应答，隐藏降噪控件');

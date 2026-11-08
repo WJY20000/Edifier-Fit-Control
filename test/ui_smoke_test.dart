@@ -153,6 +153,9 @@ void main() {
       _host(SettingsPage(session: session), size: const Size(780, 1200)),
     );
     await tester.pump(const Duration(milliseconds: 50));
+    // 设置项越来越多，开发者卡片已经在一屏之外；ListView 只构建可见项，
+    // 所以先滚到它再断言（1200 高的窗口也不一定够）。
+    await tester.scrollUntilVisible(find.text('开发者'), 240);
     expect(find.text('开发者'), findsOneWidget);
     expect(find.text('infinite'), findsOneWidget);
     expect(tester.takeException(), isNull);

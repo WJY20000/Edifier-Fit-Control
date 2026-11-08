@@ -45,7 +45,22 @@ jobs:
         run: flutter pub get
 
       - name: Build release APK (arm64-v8a)
-        run: flutter build apk --release --target-platform android-arm64
+        shell: bash
+        run: |
+          # Gradle wrapper 下载分发包时不会自己重试：GitHub Releases 偶尔回 504，
+          # 一次网络抖动就让整次构建失败（见 issue 里的 IOException: 504）。
+          # bootstrap 已经把它换成 services.gradle.org 的 -bin 包，这里再兜一层重试。
+          for attempt in 1 2 3; do
+            if flutter build apk --release --target-platform android-arm64; then
+              echo "APK 构建成功（第 $attempt 次尝试）"
+              exit 0
+            fi
+            delay=$((attempt * 20))
+            echo "APK 构建失败（第 $attempt 次尝试），${delay}s 后重试…"
+            sleep "$delay"
+          done
+          echo "连续 3 次构建失败，放弃。"
+          exit 1
 
       - name: Rename artifact
         run: |

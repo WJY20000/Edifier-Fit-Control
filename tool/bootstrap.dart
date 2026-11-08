@@ -78,6 +78,7 @@ Future<void> main(List<String> args) async {
 
   _patchAndroidManifest(root);
   _patchAndroidIcons(root);
+  _patchAndroidGradle(root);
   _patchWindows(root);
   _patchWindowsIcon(root);
 
@@ -114,6 +115,42 @@ int _copyMissing(Directory from, Directory to, {required bool force}) {
     }
   }
   return count;
+}
+
+/// 把 Gradle wrapper 的下载源换掉。
+///
+/// Flutter 3.47 的模板把 `distributionUrl` 指向 GitHub Releases
+/// （`github.com/gradle/gradle-distributions/...`），构建机上偶尔会吃到 504；
+/// Gradle wrapper 自己不会重试，一次抖动就让整次构建失败。
+/// 换成官方 CDN 的 `-bin` 包：只有运行时、没有源码和文档，体积约 `-all` 的一半，
+/// 下载更快也更不容易超时。
+///
+/// 版本号不写死，从模板自带的 URL 里解析 —— 换 Flutter 版本时跟着走。
+void _patchAndroidGradle(Directory root) {
+  final wrapper =
+      File('${root.path}/android/gradle/wrapper/gradle-wrapper.properties');
+  if (!wrapper.existsSync()) {
+    stderr.writeln('找不到 gradle-wrapper.properties，跳过 Gradle 下载源改写');
+    return;
+  }
+  var text = wrapper.readAsStringSync();
+  final match = RegExp(r'gradle-([0-9][0-9.]*)-(?:all|bin)\.zip').firstMatch(text);
+  if (match == null) {
+    stderr.writeln('没能从 distributionUrl 解析 Gradle 版本，保持原样');
+    return;
+  }
+  final version = match.group(1);
+  final url =
+      'https\\://services.gradle.org/distributions/gradle-$version-bin.zip';
+  text = text.replaceAll(
+    RegExp(r'^distributionUrl=.*$', multiLine: true),
+    'distributionUrl=$url',
+  );
+  if (!text.contains('networkTimeout=')) {
+    text = '${text.trimRight()}\nnetworkTimeout=120000\n';
+  }
+  wrapper.writeAsStringSync(text);
+  print('==> gradle-wrapper.properties：改用 services.gradle.org（$version, -bin）');
 }
 
 void _patchAndroidManifest(Directory root) {
