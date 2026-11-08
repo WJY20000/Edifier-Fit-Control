@@ -129,28 +129,19 @@ class BatteryRing extends StatelessWidget {
         builder: (context, animated, _) {
           return Stack(
             alignment: Alignment.center,
+            // 以前用 CircularProgressIndicator：它的描边是「骑」在方框边线上的，
+            // 外侧半个描边会被 Stack 默认的硬裁剪切掉，圆环看起来是「缺一块 / 被压平」。
+            // 这里自己画，并且把半径整体内缩半个描边，圆环永远完整。
+            clipBehavior: Clip.none,
             children: [
-              // 轨道
-              SizedBox(
-                width: size,
-                height: size,
-                child: CircularProgressIndicator(
-                  value: 1,
-                  strokeWidth: size * 0.06,
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    theme.colorScheme.onSurface.withValues(alpha: 0.06),
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _BatteryRingPainter(
+                    progress: value == null ? 0 : animated,
+                    strokeWidth: size * 0.06,
+                    track: theme.colorScheme.onSurface.withValues(alpha: 0.06),
+                    color: color,
                   ),
-                ),
-              ),
-              SizedBox(
-                width: size,
-                height: size,
-                child: CircularProgressIndicator(
-                  value: value == null ? 0 : animated,
-                  strokeWidth: size * 0.06,
-                  strokeCap: StrokeCap.round,
-                  valueColor: AlwaysStoppedAnimation<Color>(color),
-                  backgroundColor: Colors.transparent,
                 ),
               ),
               Column(
@@ -202,6 +193,51 @@ class BatteryRing extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 电量圆环的画笔。
+///
+/// 关键点：`drawArc` 的矩形要按描边宽度内缩，这样描边的外沿刚好落在方框边上，
+/// 不会被父级（Stack 默认 `Clip.hardEdge`）裁掉。之前的 `CircularProgressIndicator`
+/// 把描边中心放在方框边线上，外侧一半直接被剪掉，圆环顶部/底部看起来是平的。
+class _BatteryRingPainter extends CustomPainter {
+  _BatteryRingPainter({
+    required this.progress,
+    required this.strokeWidth,
+    required this.track,
+    required this.color,
+  });
+
+  /// 0..1
+  final double progress;
+  final double strokeWidth;
+  final Color track;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final inset = strokeWidth / 2;
+    final rect = Offset(inset, inset) &
+        Size(size.width - strokeWidth, size.height - strokeWidth);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..isAntiAlias = true
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(rect, 0, math.pi * 2, false, paint..color = track);
+    final value = progress.clamp(0.0, 1.0).toDouble();
+    if (value > 0) {
+      canvas.drawArc(rect, -math.pi / 2, math.pi * 2 * value, false, paint..color = color);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BatteryRingPainter old) =>
+      old.progress != progress ||
+      old.strokeWidth != strokeWidth ||
+      old.track != track ||
+      old.color != color;
 }
 
 /// 可点选的大块选项（降噪 / 场景 / 音效共用）。

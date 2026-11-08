@@ -1,5 +1,41 @@
 # 更新记录
 
+## 0.8.6 — 2026-10-19
+
+### 1. 电量圆环不再被裁掉一块
+
+以前用 `CircularProgressIndicator` 画圆环：它的描边是**骑在方框边线上**的
+（`strokeAlignCenter`），外侧半个描边会被父级 `Stack` 默认的硬裁剪切掉。
+108 px 的环、6.5 px 的描边，四边各被切掉 3 px 多，顶部看起来是平的。
+
+现在自己用 `CustomPainter` 画：`drawArc` 的矩形按描边宽度内缩半个描边，
+描边外沿刚好落在方框内，圆环在任何尺寸下都是完整的一圈；
+进度弧仍然是 12 点方向顺时针、圆头端点，轨道和进度的颜色保持不变。
+
+### 2. Android CI：Gradle 分发包改为「多源 + 兜底」，不再被 504 卡死
+
+2026-11-08 这一次，`downloads.gradle.org` / `services.gradle.org` 全部 504
+（它们都会跳到 GitHub Releases，而 GitHub 的 release 资源当时也在 504）：
+
+```
+原始地址 HTTP 504
+候选 https://downloads.gradle.org/... -> HTTP 504
+候选 https://services.gradle.org/... -> HTTP 504
+Exception ... 504 for URL: https://github.com/gradle/gradle-distributions/releases/download/v9.3.1/...
+```
+
+现在的做法：
+
+- 按顺序试 **7 个源**：模板原地址、`downloads.gradle.org`、`services.gradle.org`、
+  华为云镜像、南京大学镜像、腾讯云镜像、`downloads.gradle-dn.com`；
+  每个源都要通过 `unzip -t` 完整性校验才算成功；
+- 把 wrapper 缓存目录（`~/.gradle/wrapper/dists`）也缓存到 Actions Cache，
+  成功过一次之后，即使所有源都挂了也能直接命中；
+- 全部源都失败时，用 **runner 自带的 Gradle**（ubuntu 镜像预装）兜底，
+  并且打上标记，镜像恢复后会自动换回官方包；
+- 准备完立刻跑一次 `./gradlew --version` 验证缓存真的被 wrapper 认出来了，
+  不通过就当场报错，而不是等 6 分钟后才超时。
+
 ## 0.8.5 — 2026-10-19
 
 Windows 上的三连问题（选项时好时坏、探测后反而失败、重进卡 20 秒），以及 CI 的两处红灯。

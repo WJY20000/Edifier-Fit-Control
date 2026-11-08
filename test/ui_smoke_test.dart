@@ -11,6 +11,7 @@ import 'package:edifier_fit/ui/lab_page.dart';
 import 'package:edifier_fit/ui/scan_page.dart';
 import 'package:edifier_fit/ui/settings_page.dart';
 import 'package:edifier_fit/ui/theme.dart';
+import 'package:edifier_fit/ui/widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -124,6 +125,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('LDAC 编码'), findsOneWidget);
     expect(find.text('96k'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('电量圆环：自绘圆环能正常布局与绘制', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        const Center(
+          child: BatteryRing(percent: 41, label: '电量', size: 108),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 900));
+
+    expect(find.byType(BatteryRing), findsOneWidget);
+    expect(find.text('41'), findsOneWidget);
+    expect(find.text('电量'), findsOneWidget);
+    expect(find.byType(CustomPaint), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 

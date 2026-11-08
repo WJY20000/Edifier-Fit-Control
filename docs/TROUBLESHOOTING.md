@@ -181,6 +181,23 @@ Failed to get characteristics for service
 2. 确认没有别的程序（官方 App、Web Bluetooth 页面）同时占着这条连接；
 3. 设置 →「我的耳机」→ 先点「断开」，再点「连接我的耳机」。
 
+## 0.8.6：Android CI 里的 Gradle 504
+
+`gh run view` 里如果看到这一行，说明 Gradle 分发包的下载源在抽风，不是代码问题：
+
+```
+Exception in thread "main" java.io.IOException: Server returned HTTP response code: 504
+for URL: https://github.com/gradle/gradle-distributions/releases/download/v9.3.1/gradle-9.3.1-bin.zip
+```
+
+`services.gradle.org` 和 `downloads.gradle.org` 现在都会 307 到 GitHub Releases，
+GitHub 的 release 资源一抖，wrapper 就整条链路失败。0.8.6 的 workflow 会：
+
+1. 依次尝试官方源 + 华为云 / 南京大学 / 腾讯云镜像 + `downloads.gradle-dn.com`；
+2. 把 `~/.gradle/wrapper/dists` 缓存到 Actions Cache，成功过一次就不再依赖网络；
+3. 全部失败时用 runner 自带的 Gradle 兜底；
+4. 准备完先跑 `./gradlew --version` 验证，失败会直接给出 `::error::` 注解。
+
 ## 已知的平台限制
 
 - universal_ble 3.2.0 的 `getSystemDevices()` 在 Windows 上**只枚举已连接设备**，

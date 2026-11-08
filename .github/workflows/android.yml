@@ -41,12 +41,23 @@ jobs:
       - name: Generate Android platform folder
         run: dart tool/bootstrap.dart --platforms=android
 
+      # 把 wrapper 缓存目录也缓存下来：只要成功过一次，
+      # 后面即使所有下载源都挂了也能直接命中。
+      - name: Restore Gradle distribution cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: gradle-wrapper-dists-9.3.1-${{ runner.os }}-v1
+          restore-keys: |
+            gradle-wrapper-dists-9.3.1-
+
       # Gradle 分发包的下载是这一串红灯的根源：
-      #   * 模板默认指向 services.gradle.org（可能 307 到 GitHub Releases，
-      #     而 GitHub 的 release 资源会回 504）；
-      #   * Github 一旦抖动，wrapper 直接失败。
-      # 这里不再猜哪个源一定能用：先测原 URL，不通就换一个能通的镜像，
+      #   * 模板默认指向 services.gradle.org，它会 307 到 GitHub Releases，
+      #     而 GitHub 的 release 资源会回 504（2026-11-08 官方 CDN 也一起 504）；
+      #   * 一旦抖动，wrapper 直接失败。
+      # 这里不再猜哪个源一定能用：按顺序试多个源（官方 + 国内镜像），
       # 然后把分发包**预先解压到 wrapper 缓存目录**，构建时完全不需要联网。
+      # 全部源都挂时，用 runner 自带的 Gradle 兜底。
       - name: Prepare Gradle distribution (offline cache)
         shell: bash
         run: |
@@ -60,7 +71,7 @@ jobs:
           echo "--- 模板原始配置 ---"
           cat "$props"
 
-          # properties 里冒号写成 https\\:// —— 先把反斜杠去掉，才是真正的 URL
+          # properties 里冒号写成 https\:// —— 先把反斜杠去掉，才是真正的 URL
           raw=$(grep -E '^[[:space:]]*distributionUrl' "$props" | head -1 | sed -E 's/^[^=]*=[[:space:]]*//' | tr -d '\\')
           echo "原始 distributionUrl: $raw"
           file=$(basename "${raw%%\?*}")
@@ -71,26 +82,105 @@ jobs:
             exit 1
           fi
 
-          code_of() {
-            curl -s -o /dev/null -w '%{http_code}' -L --max-time 45 \
-              --retry 1 --retry-delay 2 "$1" 2>/dev/null || echo 000
+          base="${GRADLE_USER_HOME:-$HOME/.gradle}/wrapper/dists/${file%.zip}"
+          mkdir -p "$base"
+          tmp="${RUNNER_TEMP:-/tmp}/gradle-dist"
+          mkdir -p "$tmp"
+
+          # Gradle 的缓存目录名 = md5(distributionUrl) 的 base36
+          hash_of() {
+            python3 - "$1" <<'PY'
+          import hashlib, sys
+          n = int.from_bytes(hashlib.md5(sys.argv[1].encode("utf-8")).digest(), "big")
+          alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+          out = ""
+          while n:
+              n, r = divmod(n, 36)
+              out = alphabet[r] + out
+          print(out or "0")
+          PY
           }
 
-          url="$raw"
-          code=$(code_of "$raw")
-          echo "原始地址 HTTP $code"
-          if [ "$code" != "200" ]; then
-            for host in downloads.gradle.org services.gradle.org; do
-              cand="https://${host}/distributions/${file}"
-              c=$(code_of "$cand")
-              echo "候选 $cand -> HTTP $c"
-              if [ "$c" = "200" ]; then
-                url="$cand"
+          candidates=(
+            "$raw"
+            "https://downloads.gradle.org/distributions/$file"
+            "https://services.gradle.org/distributions/$file"
+            "https://mirrors.huaweicloud.com/gradle/$file"
+            "https://mirrors.nju.edu.cn/gradle/$file"
+            "https://mirrors.cloud.tencent.com/gradle/$file"
+            "https://downloads.gradle-dn.com/distributions/$file"
+          )
+
+          url=""
+          root=""
+          mode=""
+          # 1) 命中上次缓存（缓存目录按 URL 的 hash 命名，必须用同一个 URL 才算命中）
+          for src in "${candidates[@]}"; do
+            h=$(hash_of "$src")
+            # 兜底产物（runner 预装的 Gradle）不算命中：等镜像恢复后要能自动换回真包。
+            if [ -f "$base/$h/$file.ok" ] && [ ! -f "$base/$h/PREINSTALLED" ]; then
+              url="$src"
+              root="$base/$h"
+              mode="cache"
+              echo "缓存命中: $src"
+              break
+            fi
+          done
+
+          # 2) 依次下载（每个源都实际校验 zip 完整性）
+          if [ -z "$root" ]; then
+            for src in "${candidates[@]}"; do
+              echo "尝试下载: $src"
+              if curl -fL --retry 2 --retry-all-errors --retry-delay 2 \
+                   --connect-timeout 15 --max-time 600 \
+                   -o "$tmp/$file" "$src" 2>/dev/null \
+                 && unzip -tq "$tmp/$file" >/dev/null 2>&1; then
+                url="$src"
+                root="$base/$(hash_of "$src")"
+                mode="download"
+                echo "下载成功: $src ($(du -h "$tmp/$file" | cut -f1))"
                 break
               fi
+              rm -f "$tmp/$file"
+              echo "不可用: $src"
             done
           fi
-          echo "最终使用: $url"
+
+          if [ "$mode" = "download" ]; then
+            rm -rf "$root"
+            mkdir -p "$root"
+            unzip -q "$tmp/$file" -d "$root"
+            rm -f "$tmp/$file"
+            # 解压出来的顶层目录名不一定是 zip 名（-all 包里面是 gradle-<版本>），
+            # 所以检查「恰好一个目录 + 里面有启动器 jar」。
+            dirs=$(find "$root" -mindepth 1 -maxdepth 1 -type d | wc -l)
+            launcher=$(find "$root" -name 'gradle-launcher-*.jar' | head -1)
+            if [ "$dirs" != "1" ] || [ -z "$launcher" ]; then
+              echo "::error::解压结果不像一个 Gradle 发行包（目录数 $dirs，启动器 jar: ${launcher:-无}）"
+              ls -la "$root"
+              exit 1
+            fi
+            touch "$root/$file.ok"
+          fi
+
+          # 3) 兜底：所有源都挂了就用 runner 预装的 Gradle（ubuntu 镜像自带 9.x）
+          if [ -z "$root" ]; then
+            echo "::warning::所有下载源都不可用，改用 runner 预装的 Gradle"
+            if ! command -v gradle >/dev/null 2>&1; then
+              echo "::error::runner 上没有预装 gradle，无法离线准备"
+              exit 1
+            fi
+            gradle -v | head -8 || true
+            gradle_home="$(cd "$(dirname "$(command -v gradle)")/.." && pwd)"
+            url="$raw"
+            root="$base/$(hash_of "$url")"
+            rm -rf "$root"
+            mkdir -p "$root"
+            cp -a "$gradle_home" "$root/gradle-$version"
+            touch "$root/$file.ok"
+            touch "$root/PREINSTALLED"
+            mode="preinstalled"
+          fi
 
           # 写回 properties（冒号按 Java properties 的规矩转义）
           esc=${url//:/\\:}
@@ -110,54 +200,17 @@ jobs:
           PY
           echo "--- 改写后 ---"
           cat "$props"
+          echo "缓存目录: $root（来源：$mode）"
+          ls -la "$root"
 
-          # Gradle 的缓存路径 = <GRADLE_USER_HOME>/wrapper/dists/<zip 名>/<md5(url) 的 base36>
-          hash=$(python3 - "$url" <<'PY'
-          import hashlib, sys
-          n = int.from_bytes(hashlib.md5(sys.argv[1].encode("utf-8")).digest(), "big")
-          alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-          out = ""
-          while n:
-              n, r = divmod(n, 36)
-              out = alphabet[r] + out
-          print(out or "0")
-          PY
-          )
-          root="${GRADLE_USER_HOME:-$HOME/.gradle}/wrapper/dists/${file%.zip}/${hash}"
-          echo "缓存目录: $root"
-          mkdir -p "$root"
-
-          ok=0
-          for src in "$url" "https://downloads.gradle.org/distributions/${file}" "https://services.gradle.org/distributions/${file}"; do
-            if curl -fL --retry 4 --retry-all-errors --retry-delay 3 \
-                --connect-timeout 20 --max-time 900 \
-                -o "$root/$file" "$src"; then
-              echo "下载成功: $src ($(du -h "$root/$file" | cut -f1))"
-              ok=1
-              break
-            fi
-            echo "下载失败: $src"
-          done
-          if [ "$ok" != "1" ]; then
-            echo "::warning::预热失败，构建时由 wrapper 自行下载（已开启 retries=5）"
-            exit 0
-          fi
-
-          # 解压出来的顶层目录名不一定是 zip 名（-all 包里面是 gradle-<版本>），
-          # 所以先清空、解压、再检查「恰好一个目录 + 里面有启动器 jar」。
-          find "$root" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
-          unzip -q "$root/$file" -d "$root"
-          rm -f "$root/$file"
-          dirs=$(find "$root" -mindepth 1 -maxdepth 1 -type d | wc -l)
-          launcher=$(find "$root" -name 'gradle-launcher-*.jar' | head -1)
-          if [ "$dirs" != "1" ] || [ -z "$launcher" ]; then
-            echo "::error::解压结果不像一个 Gradle 发行包（目录数 $dirs，启动器 jar: ${launcher:-无}）"
-            ls -la "$root"
+          # 立刻让 wrapper 跑一次 --version：它如果还要联网，说明缓存没被认出来，
+          # 在这里就报清楚，而不是等 6 分钟后的构建超时。
+          if ! (cd android && ./gradlew --version > /tmp/gradlew-check.log 2>&1); then
+            echo "::error::gradlew --version 失败：缓存没有被 wrapper 识别"
+            tail -40 /tmp/gradlew-check.log || true
             exit 1
           fi
-          touch "$root/$file.ok"
-          echo "预热完成：$root"
-          ls -la "$root"
+          head -10 /tmp/gradlew-check.log
 
       - name: Resolve dependencies
         run: flutter pub get
