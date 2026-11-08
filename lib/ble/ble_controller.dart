@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:universal_ble/universal_ble.dart';
 
+import '../config.dart';
 import '../protocol/engine.dart';
 
 /// 扫描到（或从系统里取到）的一台设备。
@@ -21,6 +22,10 @@ class DiscoveredDevice {
   /// 来自「系统已连接设备」而不是扫描广播。
   final bool fromSystem;
 
+  /// 确认为「我这只耳机」：广播里的厂商数据带着它的经典 MAC
+  /// （`E0 07` + `6c1629e7b514`），或地址就是已确认的 BLE 地址。
+  final bool mine;
+
   const DiscoveredDevice({
     required this.id,
     required this.name,
@@ -28,6 +33,7 @@ class DiscoveredDevice {
     required this.services,
     required this.looksLikeEdifier,
     this.fromSystem = false,
+    this.mine = false,
   });
 
   bool get hasRssi => rssi != 0;
@@ -97,6 +103,50 @@ class BleController {
         lower.contains('w830nb');
   }
 
+  /// 这台 BLE 设备是不是「我那只耳机」。
+  ///
+  /// 判定顺序（从硬到软）：
+  /// 1. 地址就是抓包里确认的 BLE 地址；
+  /// 2. 厂商数据（company 0x07E0）里带着这只耳机的经典 MAC —— 这是硬件写的，
+  ///    换一台手机/换一台电脑都一样，最可靠；
+  /// 3. 名字里有 fit900。
+  static bool isMyHeadset(BleDevice device) {
+    final id = normalizeAddress(device.deviceId);
+    if (id == kMyHeadsetBleMac) return true;
+    for (final data in device.manufacturerDataList) {
+      if (_hasMacBytes(data.payload, kMyHeadsetClassicMac)) return true;
+    }
+    final name = (device.name ?? device.rawName ?? '').toLowerCase();
+    return name.contains('fit900') || name.contains('fit 900');
+  }
+
+  /// 在厂商数据里找 6 字节 MAC（不要求从第 0 字节开始）。
+  static bool _hasMacBytes(List<int> payload, String mac) {
+    final want = <int>[
+      for (final part in mac.split(':')) int.parse(part, radix: 16),
+    ];
+    if (payload.length < want.length) return false;
+    for (var i = 0; i + want.length <= payload.length; i++) {
+      var ok = true;
+      for (var j = 0; j < want.length; j++) {
+        if (payload[i + j] != want[j]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return true;
+    }
+    return false;
+  }
+
+  /// 扫描里出现「我那只耳机」时，返回它的 BLE 地址（用来自动固定）。
+  static String? myHeadsetId(List<BleDevice> devices) {
+    for (final device in devices) {
+      if (isMyHeadset(device)) return device.deviceId;
+    }
+    return null;
+  }
+
   void _installListeners() {
     UniversalBle.onScanResult = (device) {
       final services = device.services;
@@ -112,6 +162,7 @@ class BleController {
         rssi: device.rssi ?? -127,
         services: services,
         looksLikeEdifier: like,
+        mine: isMyHeadset(device),
       );
       if (!_scanOut.isClosed) _scanOut.add(devices);
     };
@@ -181,6 +232,19 @@ class BleController {
 
   bool get isScanning => _scanning;
 
+  /// 短扫一次再停：Windows 的 `FromBluetoothAddressAsync` 只认它「见过」的地址，
+  /// 扫一下等于告诉系统「这台正在广播」，之后再按地址连成功率会高很多。
+  Future<void> warmUp({Duration duration = const Duration(seconds: 4)}) async {
+    try {
+      await startScan();
+      await Future<void>.delayed(duration);
+    } catch (_) {
+      // 扫不起来不影响后面的直连尝试。
+    } finally {
+      await stopScan();
+    }
+  }
+
   /// 系统当前已连接的蓝牙设备（Windows: WinRT 的 Connected 设备集合）。
   ///
   /// 扫描靠的是广播，耳机被系统占用后往往不再广播，这时只能走这条路：
@@ -197,6 +261,7 @@ class BleController {
           looksLikeEdifier: looksLikeEdifierName(device.name) ||
               device.services.any(isEdifierService),
           fromSystem: true,
+          mine: normalizeAddress(device.deviceId) == kMyHeadsetBleMac,
         ),
     ];
   }

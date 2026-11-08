@@ -63,6 +63,7 @@ class L10n {
       'en': 'Skip scanning and connect straight to this address. The only reliable way when Windows holds the headphones and they stop advertising.',
     },
     'scan.connectMine': {'zh': '连接我的耳机', 'en': 'Connect my headphones'},
+    'scan.mine': {'zh': '我的', 'en': 'MINE'},
     'scan.winHint': {
       'zh': 'Windows 上的 BLE 和经典蓝牙是两套。系统里连上了，不代表 BLE 侧也绑定了；'
           '直连失败时，先在「蓝牙和设备」里删除这台耳机，再重新配对一次。',
@@ -71,8 +72,18 @@ class L10n {
           'in Bluetooth & devices and pair them again.',
     },
     'settings.macPreset': {
-      'zh': '已预填这台耳机的地址，直接点「保存并连接」即可。换耳机就在这里改。',
-      'en': 'Prefilled with this headset\'s address. Just tap Save & connect; edit it for another device.',
+      'zh': '已预填这台耳机的 BLE 地址，直接点「保存并连接」即可。换耳机就在这里改。',
+      'en': 'Prefilled with this headset\'s BLE address. Just tap Save & connect; edit it for another device.',
+    },
+    'settings.macValue': {
+      'zh': 'BLE 地址（连接用）',
+      'en': 'BLE address (used to connect)',
+    },
+    'settings.macHint': {
+      'zh': '注意：设备属性里的「唯一标识符」是经典蓝牙地址，和 BLE 地址不是同一个，'
+          '填那个会报 Failed to get device。',
+      'en': 'Note: the identifier in device properties is the classic Bluetooth address. '
+          'It is not the BLE address and will fail with \'Failed to get device\'.',
     },
     'scan.macInvalid': {
       'zh': '格式不对，应该是 AA:BB:CC:DD:EE:FF 这种六段地址。',
@@ -83,15 +94,21 @@ class L10n {
       'zh': '固定一台设备后，扫描不到也能直接连；下次启动会优先用它。',
       'en': 'Pin one device: it can be connected even when scanning finds nothing, and it is used first on the next launch.',
     },
-    'settings.macLabel': {'zh': 'MAC 地址', 'en': 'MAC address'},
+    'settings.macLabel': {'zh': 'BLE 地址', 'en': 'BLE address'},
     'settings.macHelper': {
-      'zh': 'Windows：设置 → 蓝牙和设备 → 设备和打印机 → 右键耳机 → 属性 → 唯一标识符',
-      'en': 'Windows: Settings → Bluetooth & devices → Devices & printers → right-click the headphones → Properties → Unique identifier',
+      'zh': '这是耳机广播里的 BLE 地址，不是设备属性里的「唯一标识符」（那是经典蓝牙地址，连不上）。',
+      'en': 'This is the BLE address from advertising, not the identifier in device properties (that is the classic address and will not connect).',
     },
     'settings.macConnect': {'zh': '保存并连接', 'en': 'Save & connect'},
     'settings.macForget': {'zh': '取消固定', 'en': 'Unpin'},
     'settings.macSaved': {'zh': '已固定 {mac}', 'en': 'Pinned {mac}'},
     'device.connectMine': {'zh': '连接我的耳机', 'en': 'Connect my headphones'},
+    'device.errNoBle': {
+      'zh': 'Windows 的 BLE 栈里没有这个地址。若填的是设备属性里的「唯一标识符」，那其实是经典蓝牙地址；'
+          '让耳机广播一次（或扫描页里点一次扫描），应用会自动学会真正的 BLE 地址。',
+      'en': 'Windows\'s BLE stack does not know this address. The identifier in device properties is the '
+          'classic Bluetooth address; scan once and the app will learn the real BLE address automatically.',
+    },
 
     'device.battery': {'zh': '电量', 'en': 'Battery'},
     'device.unknown': {'zh': '未知', 'en': 'Unknown'},
@@ -168,6 +185,12 @@ class L10n {
       'en': 'When off, only battery and identity are read; no control commands are sent.',
     },
     'settings.autoReconnect': {'zh': '启动时重连上次设备', 'en': 'Reconnect last device on launch'},
+    'settings.quit': {'zh': '退出应用', 'en': 'Quit'},
+    'settings.quitBody': {
+      'zh': '断开耳机并结束进程。Windows 会同时释放蓝牙占用；Android 会关闭本应用而不是留在后台。',
+      'en': 'Disconnects the headphones and ends the process. On Windows this releases the Bluetooth '
+          'connection; on Android it closes the app instead of leaving it in the background.',
+    },
     'settings.about': {'zh': '关于', 'en': 'About'},
     'settings.aboutBody': {
       'zh': '非官方工具，与漫步者无任何关联。协议来自社区逆向工程，按现状提供。',

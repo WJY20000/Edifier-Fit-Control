@@ -1,8 +1,14 @@
+import 'dart:typed_data';
+
 import 'package:edifier_fit/ble/ble_controller.dart';
 import 'package:edifier_fit/config.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:universal_ble/universal_ble.dart';
 
-/// MAC / UUID 归一：用户手输的地址格式五花八门，必须统一成平台要的形式。
+/// 地址归一 + 「哪台 BLE 设备是我这只耳机」的判定。
+///
+/// 背景：这只耳机有两个地址 —— 经典蓝牙 `…:14`、BLE 广告 `…:41`。
+/// 拿经典地址去连，WinRT 直接 `Failed to get device`。
 void main() {
   group('normalizeAddress', () {
     test('冒号分隔（大写）→ 小写冒号', () {
@@ -36,8 +42,11 @@ void main() {
     });
 
     test('内置地址本身就是规范形式', () {
-      expect(BleController.normalizeAddress(kMyHeadsetMac), kMyHeadsetMac);
-      expect(kMyHeadsetMac, '6c:16:29:e7:b5:14');
+      expect(BleController.normalizeAddress(kMyHeadsetBleMac), kMyHeadsetBleMac);
+      expect(kMyHeadsetBleMac, '6c:16:29:e7:b5:41');
+      expect(kMyHeadsetClassicMac, '6c:16:29:e7:b5:14');
+      // 两个地址必须不同，否则「经典地址连不上」这条经验就不成立了。
+      expect(kMyHeadsetBleMac, isNot(kMyHeadsetClassicMac));
     });
 
     test('位数不对 / 空 / null 都返回 null', () {
@@ -46,6 +55,52 @@ void main() {
       expect(BleController.normalizeAddress(''), isNull);
       expect(BleController.normalizeAddress('   '), isNull);
       expect(BleController.normalizeAddress(null), isNull);
+    });
+  });
+
+  group('isMyHeadset', () {
+    BleDevice device({
+      String id = 'aa:bb:cc:dd:ee:ff',
+      String? name,
+      List<ManufacturerData> mfg = const [],
+    }) =>
+        BleDevice(
+          deviceId: id,
+          name: name,
+          rssi: -50,
+          manufacturerDataList: mfg,
+        );
+
+    test('地址就是已确认的 BLE 地址', () {
+      expect(BleController.isMyHeadset(device(id: kMyHeadsetBleMac)), isTrue);
+    });
+
+    test('厂商数据里带着这只耳机的经典 MAC', () {
+      final mfg = ManufacturerData(
+        kEdifierCompanyId,
+        // e0 07 已由 ManufacturerData 拆走，payload 只剩 MAC + 02 00。
+        Uint8List.fromList(const [0x6c, 0x16, 0x29, 0xe7, 0xb5, 0x14, 0x02, 0x00]),
+      );
+      expect(BleController.isMyHeadset(device(mfg: [mfg])), isTrue);
+    });
+
+    test('别的漫步者耳机不算', () {
+      final mfg = ManufacturerData(
+        kEdifierCompanyId,
+        Uint8List.fromList(const [0xc8, 0x24, 0x78, 0x55, 0x64, 0xca, 0x02, 0x00]),
+      );
+      expect(
+        BleController.isMyHeadset(device(name: 'EDIFIER BLE', mfg: [mfg])),
+        isFalse,
+      );
+    });
+
+    test('名字里有 Fit900 也算（没有广播数据时兜底）', () {
+      expect(
+        BleController.isMyHeadset(device(name: 'EDIFIER Fit900NB Turbo')),
+        isTrue,
+      );
+      expect(BleController.isMyHeadset(device(name: 'EDIFIER BLE')), isFalse);
     });
   });
 }

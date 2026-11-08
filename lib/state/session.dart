@@ -45,8 +45,11 @@ class Session extends ChangeNotifier {
 
   String? deviceId;
 
-  /// 用户固定下来的那台耳机（MAC）。扫描不到时可以直接连它。
+  /// 用户固定下来的那台耳机（**BLE 地址**）。扫描不到时可以直接连它。
   String? targetMac;
+
+  /// 用户点过「取消固定」：别再用内置地址自动填回去。
+  bool _macCleared = false;
   String? deviceName;
   String? peripheralName;
 
@@ -88,14 +91,20 @@ class Session extends ChangeNotifier {
     autoReconnect = _prefs?.getBool(_kAutoReconnect) ?? true;
     // 首次启动直接固定这台耳机：用户只有它，光等广播没有意义。
     // 用户点过「取消固定」就尊重这个选择（_kMacCleared），不再自动填回去。
-    final storedMac = BleController.normalizeAddress(_prefs?.getString(_kTargetMac));
-    final macCleared = _prefs?.getBool(_kMacCleared) ?? false;
-    targetMac = storedMac ??
-        (macCleared ? null : BleController.normalizeAddress(kMyHeadsetMac));
+    var storedMac = BleController.normalizeAddress(_prefs?.getString(_kTargetMac));
+    _macCleared = _prefs?.getBool(_kMacCleared) ?? false;
+    // 旧版本把「经典蓝牙地址」当成了连接地址（连不上，报 Failed to get device）。
+    // 这里静默迁移成真正的 BLE 地址。
+    if (storedMac == kMyHeadsetClassicMac) {
+      storedMac = kMyHeadsetBleMac;
+      _prefs?.setString(_kTargetMac, kMyHeadsetBleMac);
+    }
+    targetMac = storedMac ?? (_macCleared ? null : kMyHeadsetBleMac);
 
     ble.installListeners();
     _scanSub = ble.scanResults.listen((list) {
       devices = list;
+      _learnAddress(list);
       notifyListeners();
     });
     _disconnectSub = ble.disconnects.listen((change) {
@@ -127,17 +136,42 @@ class Session extends ChangeNotifier {
       final last = targetMac ?? _prefs?.getString(_kLastId);
       if (last != null && last.isNotEmpty) {
         // 固定地址优先用内置的名字：Windows 的 BLE 侧常常只有地址没有名字。
+        final normalized = BleController.normalizeAddress(last);
         final name = _prefs?.getString(_kLastName) ??
-            (BleController.normalizeAddress(last) ==
-                    BleController.normalizeAddress(kMyHeadsetMac)
+            (normalized == kMyHeadsetBleMac || normalized == kMyHeadsetClassicMac
                 ? kMyHeadsetName
                 : null);
         // 静默重连：不阻塞启动，失败就停在「未连接」。
-        unawaited(
-          connectTo(last, name, auto: true).catchError((Object _) {}),
-        );
+        // 失败后再补一次「短扫 + 重试」：开机时 Windows 可能还没见过这台设备。
+        unawaited(() async {
+          await connectTo(last, name, auto: true).catchError((Object _) {});
+          if (connected) return;
+          await ble.warmUp(duration: const Duration(seconds: 3));
+          final retry = targetMac ?? last;
+          await connectTo(retry, name, auto: true).catchError((Object _) {});
+        }());
       }
     }
+  }
+
+  /// 扫描到「我那只耳机」时，把它真正的 BLE 地址记下来。
+  ///
+  /// 经典蓝牙地址是 `…:14`、BLE 广告地址是 `…:41`，两者不同。
+  /// 用户从设备属性里复制到的往往是前者，直接连一定失败。
+  /// 只要它广播一次（厂商数据里带着经典 MAC），这里就能自动纠正。
+  void _learnAddress(List<DiscoveredDevice> list) {
+    if (_macCleared) return;
+    final mine = list.where((d) => d.mine).toList();
+    if (mine.isEmpty) return;
+    final id = mine.first.id;
+    if (targetMac == id) return;
+    // 只覆盖「内置值 / 经典地址 / 空」，别把用户手动固定成别的设备改掉。
+    final auto = targetMac == null ||
+        targetMac == kMyHeadsetBleMac ||
+        targetMac == kMyHeadsetClassicMac;
+    if (!auto) return;
+    targetMac = id;
+    _prefs?.setString(_kTargetMac, id);
   }
 
   void setLocale(String value) {
@@ -259,6 +293,7 @@ class Session extends ChangeNotifier {
     final mac = BleController.normalizeAddress(raw);
     targetMac = mac;
     // 偏好写入本身不用等（失败也不影响本次连接）。
+    _macCleared = mac == null;
     if (mac == null) {
       _prefs?.remove(_kTargetMac);
       // 记住「是用户主动取消的」，否则下次启动又会被内置地址填回去。
@@ -285,9 +320,23 @@ class Session extends ChangeNotifier {
       notifyListeners();
       return false;
     }
-    await setTargetMac(mac);
-    await connectTo(mac, null, auto: false);
-    return connected;
+    // 用户很可能填的是经典蓝牙地址（Windows 属性里显示的那个）。
+    // BLE 栈不认识它，直接换成已知的 BLE 地址。
+    final target = mac == kMyHeadsetClassicMac ? kMyHeadsetBleMac : mac;
+    await setTargetMac(target);
+    await connectTo(target, null, auto: false);
+    if (connected) return true;
+
+    // 还不行：短扫一次，让 Windows 的 BLE 栈先「看见」这台设备。
+    // 扫描期间如果认出了这只耳机，_learnAddress 会把地址纠正成实际广播的那个。
+    await ble.warmUp();
+    final retry = targetMac ?? target;
+    await connectTo(retry, null, auto: false);
+    if (connected) {
+      await setTargetMac(retry);
+      return true;
+    }
+    return false;
   }
 
   /// 系统当前已连接的设备（不依赖广播）。
@@ -389,6 +438,28 @@ class Session extends ChangeNotifier {
       _intentionalDisconnect = false;
     }
     notifyListeners();
+  }
+
+  /// 退出前收尾：停扫描、断连接、停定时器。
+  ///
+  /// 只做清理，不关 notifyListeners 之外的任何东西；
+  /// 调用方（退出流程）负责真的结束进程。
+  Future<void> shutdown() async {
+    _scanTimer?.cancel();
+    _scanTimer = null;
+    _batteryTimer?.cancel();
+    _batteryTimer = null;
+    try {
+      await ble.stopScan();
+    } catch (_) {
+      // 扫描没开或已经停了，不影响退出。
+    }
+    try {
+      // 关窗口时别让用户干等：最多 2 秒，之后直接结束进程。
+      await disconnect().timeout(const Duration(seconds: 2));
+    } catch (_) {
+      // 连接本来就断了 / 超时了，忽略。
+    }
   }
 
   /// 每两分钟轻量刷新一次电量（0xD0 是最安全的查询，不会改任何设置）。

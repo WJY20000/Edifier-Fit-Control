@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_info.dart';
+import '../platform/quit.dart';
 import '../config.dart';
 import '../state/session.dart';
 import 'theme.dart';
@@ -216,6 +217,25 @@ class SettingsPage extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(height: 14),
+        SectionCard(
+          title: l10n.t('settings.quit'),
+          icon: Icons.power_settings_new_rounded,
+          subtitle: l10n.t('settings.quitBody'),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              // 直接退出，不再弹二次确认：用户要的就是「点了就走」。
+              onPressed: () => quitApp(session),
+              icon: const Icon(Icons.logout_rounded, size: 18),
+              label: Text(l10n.t('settings.quit')),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: theme.colorScheme.error,
+                side: BorderSide(color: theme.colorScheme.error.withValues(alpha: 0.35)),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -367,7 +387,8 @@ class _TargetMacEditorState extends State<_TargetMacEditor> {
               ),
           ],
         ),
-        if (session.targetMac?.toLowerCase() == kMyHeadsetMac) ...[
+        if (session.targetMac?.toLowerCase() == kMyHeadsetBleMac ||
+            session.targetMac?.toLowerCase() == kMyHeadsetClassicMac) ...[
           const SizedBox(height: 10),
           Text(
             l10n.t('settings.macPreset'),

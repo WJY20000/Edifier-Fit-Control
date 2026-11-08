@@ -470,6 +470,25 @@ class _DeviceTile extends StatelessWidget {
                           const SizedBox(width: 6),
                           Icon(Icons.push_pin_rounded, size: 12, color: FitColors.gold),
                         ],
+                        if (device.mine) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: FitColors.accent.withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              l10n.t('scan.mine'),
+                              style: TextStyle(
+                                fontSize: 8,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.5,
+                                color: FitTheme.accentOf(context),
+                              ),
+                            ),
+                          ),
+                        ],
                         if (device.looksLikeEdifier) ...[
                           const SizedBox(width: 8),
                           Container(

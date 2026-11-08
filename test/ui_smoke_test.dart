@@ -156,5 +156,11 @@ void main() {
     expect(find.text('开发者'), findsOneWidget);
     expect(find.text('infinite'), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    // 退出卡片在列表最底部，滚下去才构建出来。
+    await tester.scrollUntilVisible(find.text('退出应用').first, 220);
+    // 标题 + 按钮都叫「退出应用」，所以是两个。
+    expect(find.text('退出应用'), findsNWidgets(2));
+    expect(tester.takeException(), isNull);
   });
 }

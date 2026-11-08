@@ -1,6 +1,10 @@
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import '../i18n/l10n.dart';
+import '../platform/quit.dart';
 import '../state/session.dart';
 import 'device_page.dart';
 import 'lab_page.dart';
@@ -20,9 +24,19 @@ class _FitAppState extends State<FitApp> {
   final Session _session = Session();
   bool _ready = false;
 
+  /// 关闭窗口（Windows 右上角 ×、Alt+F4）时先断开耳机再退出，
+  /// 而不是把进程留在后台占着蓝牙。
+  AppLifecycleListener? _lifecycle;
+
   @override
   void initState() {
     super.initState();
+    _lifecycle = AppLifecycleListener(
+      onExitRequested: () async {
+        await _session.shutdown();
+        return AppExitResponse.exit;
+      },
+    );
     _session.init().whenComplete(() {
       if (mounted) setState(() => _ready = true);
     });
@@ -30,6 +44,7 @@ class _FitAppState extends State<FitApp> {
 
   @override
   void dispose() {
+    _lifecycle?.dispose();
     _session.dispose();
     super.dispose();
   }
@@ -171,6 +186,30 @@ class _HomeShellState extends State<HomeShell> {
     final body = IndexedStack(index: _index, children: pages);
     final maxWidth = _index == 0 ? 1180.0 : 900.0;
 
+    return PopScope(
+      // Android：在设备页按返回键 = 退出应用（而不是缩到后台）；
+      // 在别的分页则先回到设备页。
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_index != 0) {
+          setState(() => _index = 0);
+          return;
+        }
+        quitApp(session);
+      },
+      child: _buildShell(context, l10n, titles, destinations, body, maxWidth),
+    );
+  }
+
+  Widget _buildShell(
+    BuildContext context,
+    L10n l10n,
+    List<String> titles,
+    List<_Destination> destinations,
+    Widget body,
+    double maxWidth,
+  ) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 840;
