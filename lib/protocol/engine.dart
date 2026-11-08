@@ -66,6 +66,7 @@ class EdifierEngine {
   int? responseHead;
   String? serviceUuid;
   String? writeUuid;
+  String? notifyServiceUuid;
   String? notifyUuid;
 
   final DeviceState state = DeviceState();
@@ -94,6 +95,9 @@ class EdifierEngine {
   }
 
   void _info(String text) => _record(LogDirection.info, text);
+
+  /// 从外部往实验室日志里写一行（例如 GATT 服务清单）。
+  void logInfo(String text) => _info(text);
 
   /// 开始监听通知。
   void start() {
@@ -199,9 +203,12 @@ class EdifierEngine {
     ready = false;
     // 把通道写进日志：万一还是「无应答」，一眼就能看出是不是选错了服务。
     _info(
-      '通道 service=${serviceUuid ?? '?'} write=${writeUuid ?? '?'} '
-      'notify=${notifyUuid ?? '?'}',
+      '通道 write=${serviceUuid ?? '?'}/${writeUuid ?? '?'} '
+      'notify=${notifyServiceUuid ?? serviceUuid ?? '?'}/${notifyUuid ?? '?'}',
     );
+    if (notifyUuid != null && !notifyUuid!.toLowerCase().startsWith('48090001')) {
+      _info('注意：通知特征不是 48090001，很可能收不到厂商回包');
+    }
     await _probeFraming();
     if (!caps.battery) {
       _info(

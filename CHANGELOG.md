@@ -1,5 +1,47 @@
 # 更新记录
 
+## 0.8.4 — 2026-10-19
+
+你的真机日志把问题钉死了：**写对了、等回包等错了口**。
+
+```
+INFO 通道 service=48097303-…  write=48090002-…  notify=0000ff18-…
+INFO 电池查询无应答，协商失败（本次共收到 0 帧通知）
+```
+
+### 通道：按特征值配对，而不是「每个服务取第一个可通知的」
+
+- `48097303` 这个服务里除了 `48090002`（写）和 `48090001`（通知），
+  还有一个同样可通知的 `0000ff18-…`。Windows 插件把特征存在
+  `unordered_map` 里，遍历顺序是哈希序；旧代码抓到第一个可通知的就是
+  `0000ff18`，于是命令写在 `48090002`、回包却在 `0000ff18` 上等，一帧都收不到。
+- 之前把 `48097303` 当成「OTA 口、永远排最后」是错的 —— 它配对成功之后
+  才可枚举，里面放的就是控制口。这个服务级黑名单已删除。
+- 现在按「写 × 通知」逐个配对打分：`48090002` + `48090001` 最高，
+  标准 GATT 特征降权；`EdifierGatt` 允许写服务与通知服务不同。
+- 订阅/退订分别使用各自的服务 UUID。
+- 实验室日志会打出整张 GATT 服务表；通知口不是 `48090001` 时额外警告。
+
+### CI：Gradle 504 的真凶是 services.gradle.org 的 307 跳转
+
+CI 注解里的失败 URL 是
+`https://github.com/gradle/gradle-distributions/releases/download/v9.3.1/gradle-9.3.1-bin.zip`
+—— 说明配置里写的 `services.gradle.org` 被 **307 重定向到了 GitHub Releases**，
+而 GitHub 那个发布资源正在 504。重试只是重复走同一条坏链路。
+
+- `distributionUrl` 改用 `downloads.gradle.org`（Gradle 自己的 CDN，直接给文件，
+  不经过 GitHub）。`tool/bootstrap.dart` 与 workflow 两处都改。
+- 预热步骤优先从 `downloads.gradle.org` 拉，失败再退回 `services.gradle.org`
+  （curl `-L` 会跟随跳转），只要预热成功，构建时根本不联网下载。
+- wrapper 配置里的 `retries=5` / `retryBackOffMs=3000` 保留。
+
+### 测试
+
+- 设置页从 `ListView` 改成 `SingleChildScrollView + Column`：所有卡片都会构建，
+  不再依赖「滚动去碰」懒加载的列表项；`ui_smoke_test` 的滚动断言随之删掉。
+- 新增 `test/gatt_pick_test.dart`：用真机那三条特征复现「选了 0000ff18」，
+  断言第一候选必须是 `48090002` + `48090001`，以及跨服务配对、空服务表等边界。
+
 ## 0.8.3 — 2026-10-19
 
 「不止降噪，上次啥都没读出来」—— 找到了一个更底层的 bug：**所有通知都被丢掉了**。

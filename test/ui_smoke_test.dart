@@ -148,25 +148,17 @@ void main() {
       expect(tester.takeException(), isNull);
     }
 
-    // 开发者卡片：署名与头像都得在（头像走 assets，加载失败有回退，不应抛异常）。
+    // 开发者卡片 & 退出卡片：设置页现在用 SingleChildScrollView + Column，
+    // 所有卡片都会构建（不再依赖滚动去「碰」ListView 的可见项），
+    // 直接断言即可 —— 也就不会再被输入框自带的横向 Scrollable 干扰。
     await tester.pumpWidget(
       _host(SettingsPage(session: session), size: const Size(780, 1200)),
     );
     await tester.pump(const Duration(milliseconds: 50));
-    // 设置项越来越多，开发者卡片已经在一屏之外；ListView 只构建可见项，
-    // 所以先滚到它再断言（1200 高的窗口也不一定够）。
-    //
-    // 必须显式指定滚动容器：设置页里「我的耳机」有个地址输入框，
-    // 它自带一个横向的 Scrollable（restorationId: "editable"）。
-    // 不指定的话 drag() 会同时匹配到两个 Scrollable 而直接报错。
-    final settingsList = find.byType(Scrollable).first;
-    await tester.scrollUntilVisible(find.text('开发者'), 240, scrollable: settingsList);
     expect(find.text('开发者'), findsOneWidget);
     expect(find.text('infinite'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    // 退出卡片在列表最底部，滚下去才构建出来。
-    await tester.scrollUntilVisible(find.text('退出应用').first, 220, scrollable: settingsList);
     // 标题 + 按钮都叫「退出应用」，所以是两个。
     expect(find.text('退出应用'), findsNWidgets(2));
     expect(tester.takeException(), isNull);

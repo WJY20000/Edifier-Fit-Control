@@ -255,8 +255,7 @@ class Session extends ChangeNotifier {
       final detected = Profiles.resolve(name);
       NegotiationResult? negotiation;
 
-      // 一台耳机可能同时暴露「控制口」和「OTA / 工厂口」。选错了也不会报错，
-      // 只是写出去的命令永远没有回包 —— 所以一个通道谈不下来就换下一个。
+      // 不同的「写 + 通知」配对都试一遍：选错了不会报错，只是永远没有回包。
       for (var index = 0; index < candidates.length; index++) {
         final gatt = candidates[index];
         final bleLink = UniversalBleLink(
@@ -269,7 +268,11 @@ class Session extends ChangeNotifier {
         final edifier = EdifierEngine(link: bleLink, profile: detected);
         edifier.serviceUuid = gatt.service;
         edifier.writeUuid = gatt.write;
+        edifier.notifyServiceUuid = gatt.notifyService;
         edifier.notifyUuid = gatt.notify;
+        for (final line in ble.lastGattDump) {
+          edifier.logInfo(line);
+        }
         engine = edifier;
         profile = detected;
         await _frameSub?.cancel();

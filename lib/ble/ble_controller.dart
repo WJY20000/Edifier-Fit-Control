@@ -40,8 +40,17 @@ class DiscoveredDevice {
 }
 
 /// 一次连接里用到的 GATT 通道。
+///
+/// 写和通知**不一定是同一个服务**：Windows / Android 对同一个特征值的
+/// 归属报告可能不同，硬把两者塞进一个服务里会导致命令写进 A、却在 B 上等回包。
+/// 所以这里各记各的服务 UUID。
 class EdifierGatt {
+  /// 写特征所属的服务。
   final String service;
+
+  /// 通知特征所属的服务（通常与 [service] 相同）。
+  final String notifyService;
+
   final String write;
   final String notify;
 
@@ -49,16 +58,17 @@ class EdifierGatt {
   /// 用带响应的方式写会直接失败，所以要记下来。
   final bool writeWithResponse;
 
-  const EdifierGatt({
+  EdifierGatt({
     required this.service,
     required this.write,
     required this.notify,
+    String? notifyService,
     this.writeWithResponse = true,
-  });
+  }) : notifyService = notifyService ?? service;
 
   @override
-  String toString() =>
-      'service=$service write=$write notify=$notify writeWithResponse=$writeWithResponse';
+  String toString() => 'write=$service/$write notify=$notifyService/$notify '
+      'writeWithResponse=$writeWithResponse';
 }
 
 /// universal_ble 的薄封装：扫描、连接、找通道。
@@ -71,6 +81,9 @@ class BleController {
 
   bool _scanning = false;
   bool showAll = false;
+
+  /// 最近一次连接时发现到的全部服务与特征，排障用。
+  List<String> lastGattDump = const <String>[];
 
   Stream<List<DiscoveredDevice>> get scanResults => _scanOut.stream;
 
@@ -354,6 +367,7 @@ class BleController {
     await UniversalBle.connect(deviceId, timeout: timeout);
     if (kDebugMode) debugPrint('[ble] connected $deviceId');
     final services = await UniversalBle.discoverServices(deviceId);
+    lastGattDump = describeServices(services);
     final candidates = gattCandidates(services);
     if (candidates.isEmpty) {
       await UniversalBle.disconnect(deviceId);
@@ -390,64 +404,121 @@ class BleController {
     }
   }
 
-  /// 从服务表里挑出写 / 通知通道，按可信度从高到低排序。
+  /// 从服务表里挑出「写 + 通知」的配对，按可信度从高到低排序。
   ///
-  /// 关键：`48097303-…` 是耳机要求加密链路的 OTA / 工厂口，**不能**当控制通道用。
-  /// 往那里写命令不会得到任何回包，表现就是「电池查询无应答，协商失败」。
-  /// 真机抓包确认控制通道是 `48090002`（写）+ `48090001`（通知），
-  /// 所以优先认这两个特征值，其次才是 4809 前缀，最后才是任意能读写的服务。
+  /// 这里必须按**特征值**配对，而不是「每个服务各取第一个可写和第一个可通知」：
+  ///
+  /// - Windows 的插件用 `unordered_map` 保存特征，遍历顺序是哈希序，不是声明序；
+  ///   旧代码取「第一个可通知的」，结果拿到了 `0000ff18-…`（标准服务里的通知口），
+  ///   而真正的通知口是 `48090001`。订阅错了口，耳机永远不会有回包。
+  /// - 写口和通知口还可能分属不同服务，所以 [EdifierGatt] 允许两个服务不同。
+  ///
+  /// 真机（Fit900NB Turbo，固件 1.0.3）确认：写 `48090002`、通知 `48090001`，
+  /// 两者都在 `48097303-1a48-11e9-ab14-d663bd873d93` 这个厂商服务里。
   static List<EdifierGatt> gattCandidates(List<BleService> services) {
-    final scored = <_GattCandidate>[];
+    final writables = <_CharRef>[];
+    final notifiables = <_CharRef>[];
     for (var index = 0; index < services.length; index++) {
       final service = services[index];
-      String? write;
-      String? notify;
-      var writeWithResponse = true;
+      final serviceUuid = service.uuid.toLowerCase();
       for (final ch in service.characteristics) {
         final props = ch.properties;
-        final canWrite = props.contains(CharacteristicProperty.write) ||
-            props.contains(CharacteristicProperty.writeWithoutResponse);
-        final canNotify = props.contains(CharacteristicProperty.notify) ||
-            props.contains(CharacteristicProperty.indicate);
-        // 写与通知分开判断：个别固件把两者放在同一个特征上。
-        if (write == null && canWrite) {
-          write = ch.uuid;
-          writeWithResponse = props.contains(CharacteristicProperty.write);
+        final uuid = ch.uuid.toLowerCase();
+        if (props.contains(CharacteristicProperty.write) ||
+            props.contains(CharacteristicProperty.writeWithoutResponse)) {
+          writables.add(
+            _CharRef(
+              service: serviceUuid,
+              uuid: uuid,
+              order: index,
+              withResponse: props.contains(CharacteristicProperty.write),
+            ),
+          );
         }
-        if (notify == null && canNotify) notify = ch.uuid;
+        if (props.contains(CharacteristicProperty.notify) ||
+            props.contains(CharacteristicProperty.indicate)) {
+          notifiables.add(
+            _CharRef(service: serviceUuid, uuid: uuid, order: index, withResponse: false),
+          );
+        }
       }
-      if (write == null || notify == null) continue;
-      final candidate = EdifierGatt(
-        service: service.uuid,
-        write: write,
-        notify: notify,
-        writeWithResponse: writeWithResponse,
-      );
-      scored.add(
-        _GattCandidate(_gattScore(service.uuid, write, notify), index, candidate),
-      );
     }
-    scored.sort((a, b) {
+    final pairs = <_GattCandidate>[];
+    for (final w in writables) {
+      for (final n in notifiables) {
+        // 同服务的组合优先；跨服务也允许（有些固件就是这么分的）。
+        final sameService = w.service == n.service;
+        final score = _pairScore(w, n) + (sameService ? 5 : 0);
+        pairs.add(
+          _GattCandidate(
+            score,
+            w.order * 1000 + n.order,
+            EdifierGatt(
+              service: w.service,
+              notifyService: n.service,
+              write: w.uuid,
+              notify: n.uuid,
+              writeWithResponse: w.withResponse,
+            ),
+          ),
+        );
+      }
+    }
+    if (pairs.isEmpty) return const <EdifierGatt>[];
+    pairs.sort((a, b) {
       if (a.score != b.score) return b.score.compareTo(a.score);
       return a.order.compareTo(b.order);
     });
-    return <EdifierGatt>[for (final item in scored) item.gatt];
+    // 同一对写/通知只保留一次（不同服务下可能出现完全相同的 UUID 组合）。
+    final seen = <String>{};
+    final result = <EdifierGatt>[];
+    for (final item in pairs) {
+      final key = '${item.gatt.service}|${item.gatt.write}|'
+          '${item.gatt.notifyService}|${item.gatt.notify}';
+      if (!seen.add(key)) continue;
+      result.add(item.gatt);
+      if (result.length >= 8) break;
+    }
+    return result;
   }
 
-  /// 给一个候选通道打分：越大越可能是真正的控制口。
-  static int _gattScore(String serviceUuid, String write, String notify) {
-    final service = serviceUuid.toLowerCase();
-    final w = write.toLowerCase();
-    final n = notify.toLowerCase();
-    // 受保护的 OTA / 工厂口：永远排最后。
-    if (service.startsWith('48097303')) return 0;
-    final knownWrite = w.startsWith('48090002');
-    final knownNotify = n.startsWith('48090001');
-    if (knownWrite && knownNotify) return 100;
-    if (service.startsWith('48090000')) return 90;
-    if (knownWrite || knownNotify) return 80;
-    if (isEdifierService(service)) return 50;
-    return 10;
+  /// 给一个「写 + 通知」配对打分：越大越像真正的控制口。
+  static int _pairScore(_CharRef write, _CharRef notify) {
+    var score = 0;
+    // 抓包确认的两个特征值，权重最高。
+    if (write.uuid.startsWith('48090002')) {
+      score += 100;
+    } else if (write.uuid.startsWith('4809')) {
+      score += 60;
+    }
+    if (notify.uuid.startsWith('48090001')) {
+      score += 120;
+    } else if (notify.uuid.startsWith('4809')) {
+      score += 60;
+    }
+    // 标准 GATT 特征（0000xxxx-0000-1000-8000-00805f9b34fb）通常不是厂商控制口。
+    if (_isStandardUuid(write.uuid) && !write.uuid.startsWith('4809')) score -= 40;
+    if (_isStandardUuid(notify.uuid)) score -= 40;
+    return score;
+  }
+
+  static bool _isStandardUuid(String uuid) =>
+      uuid.startsWith('0000') && uuid.endsWith('-0000-1000-8000-00805f9b34fb');
+
+  /// 把发现到的服务/特征整理成几行日志，方便排障时直接贴出来。
+  static List<String> describeServices(List<BleService> services) {
+    final lines = <String>[];
+    for (final service in services) {
+      final props = <String>[];
+      for (final ch in service.characteristics) {
+        props.add('${ch.uuid}[${ch.properties.map((p) => p.name).join(',')}]');
+      }
+      lines.add(
+        'GATT 服务 ${service.uuid}：'
+        '${props.isEmpty ? '（无特征，可能被系统拒绝）' : props.join(' ')}',
+      );
+    }
+    return lines;
   }
 
   /// 只要最可信的一个通道。
@@ -524,7 +595,11 @@ class UniversalBleLink implements EdifierLink {
   }
 
   Future<void> subscribe() async {
-    await UniversalBle.subscribeNotifications(deviceId, gatt.service, gatt.notify);
+    await UniversalBle.subscribeNotifications(
+      deviceId,
+      gatt.notifyService,
+      gatt.notify,
+    );
     // CCCD 写完到耳机真正开始推送还有几十毫秒；立刻发第一条命令偶尔会被丢掉，
     // 表现就是「电池查询无应答」。留一点余量，代价可以忽略。
     await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -532,16 +607,31 @@ class UniversalBleLink implements EdifierLink {
 
   Future<void> unsubscribe() async {
     try {
-      await UniversalBle.unsubscribe(deviceId, gatt.service, gatt.notify);
+      await UniversalBle.unsubscribe(deviceId, gatt.notifyService, gatt.notify);
     } catch (_) {}
   }
+}
+
+/// 一个可写 / 可通知的特征，记住它属于哪个服务。
+class _CharRef {
+  _CharRef({
+    required this.service,
+    required this.uuid,
+    required this.order,
+    required this.withResponse,
+  });
+
+  final String service;
+  final String uuid;
+  final int order;
+  final bool withResponse;
 }
 
 /// [BleController.gattCandidates] 排序用的中间结果。
 class _GattCandidate {
   _GattCandidate(this.score, this.order, this.gatt);
 
-  /// 可信度：100 = 抓包确认的控制特征，0 = 受保护的 OTA 口。
+  /// 可信度：越大越可能是真正的控制口。
   final int score;
 
   /// 在原始服务表里的下标，用来保证同分时顺序稳定。

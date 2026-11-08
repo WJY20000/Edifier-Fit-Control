@@ -119,9 +119,9 @@ int _copyMissing(Directory from, Directory to, {required bool force}) {
 
 /// 把 Gradle wrapper 的下载源换掉。
 ///
-/// Flutter 3.47 的模板把 `distributionUrl` 指向 GitHub Releases
-/// （`github.com/gradle/gradle-distributions/...`），构建机上偶尔会吃到 504；
-/// Gradle wrapper 自己不会重试，一次抖动就让整次构建失败。
+/// `services.gradle.org` 现在会 307 跳到 GitHub Releases
+/// （`github.com/gradle/gradle-distributions/...`），构建机上偶尔吃到 504；
+/// Gradle wrapper 自己重试也只能重试这条会被 504 的链路。
 /// 换成官方 CDN 的 `-bin` 包：只有运行时、没有源码和文档，体积约 `-all` 的一半，
 /// 下载更快也更不容易超时。
 ///
@@ -147,13 +147,13 @@ void _patchAndroidGradle(Directory root) {
     'distributionPath=wrapper/dists\n'
     'zipStoreBase=GRADLE_USER_HOME\n'
     'zipStorePath=wrapper/dists\n'
-    'distributionUrl=https\\://services.gradle.org/distributions/gradle-$version-bin.zip\n'
+    'distributionUrl=https\\://downloads.gradle.org/distributions/gradle-$version-bin.zip\n'
     'networkTimeout=120000\n'
     // Gradle 8.9+ 的 wrapper 自己会重试：5 次、3 秒起步的指数退避。
     'retries=5\n'
     'retryBackOffMs=3000\n',
   );
-  print('==> gradle-wrapper.properties：改用 services.gradle.org（$version, -bin, retries=5）');
+  print('==> gradle-wrapper.properties：改用 downloads.gradle.org（$version, -bin, retries=5）');
 }
 
 void _patchAndroidManifest(Directory root) {

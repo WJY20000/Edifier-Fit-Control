@@ -22,9 +22,15 @@ class SettingsPage extends StatelessWidget {
     final theme = Theme.of(context);
     final muted = theme.colorScheme.onSurface.withValues(alpha: 0.55);
 
-    return ListView(
+    // 用 SingleChildScrollView + Column 而不是 ListView：
+    // ListView 只构建可见项，设置项一多，「开发者」「退出应用」这些卡片
+    // 在无头测试（以及很矮的窗口）里根本不会被创建，测试只能靠滚动去碰运气。
+    // 设置页只有十几个卡片，全部构建的开销可以忽略。
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 32),
-      children: [
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
         SectionCard(
           title: l10n.t('settings.theme'),
           icon: Icons.palette_outlined,
@@ -236,7 +242,8 @@ class SettingsPage extends StatelessWidget {
             ),
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 }

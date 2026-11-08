@@ -43,7 +43,9 @@ jobs:
 
       # bootstrap 里已经改过一次；这里再无条件改一次并打印结果，
       # 免得因为仓库里的 android/ 是旧的、或者模板又换回 GitHub Releases，
-      # 最后又去吃 504。Gradle 9 的 wrapper 支持 retries，一并写上。
+      # 最后又去吃 504。
+      # 注意：services.gradle.org 现在 307 跳到 GitHub Releases，
+      # 重试也还是那条会 504 的链路，所以这里固定用 downloads.gradle.org。
       - name: Point Gradle wrapper at the official CDN
         shell: bash
         run: |
@@ -59,7 +61,7 @@ jobs:
           if [ -z "${version:-}" ]; then
             version=9.3.1
           fi
-          url="https://services.gradle.org/distributions/gradle-${version}-bin.zip"
+          url="https://downloads.gradle.org/distributions/gradle-${version}-bin.zip"
           {
             echo 'distributionBase=GRADLE_USER_HOME'
             echo 'distributionPath=wrapper/dists'
@@ -72,7 +74,7 @@ jobs:
           } > "$props"
           echo "--- 改写之后（Gradle ${version}）---"
           cat "$props"
-          grep -q 'services.gradle.org' "$props"
+          grep -q 'downloads.gradle.org' "$props"
 
       # 把分发包直接放进 wrapper 的缓存目录，构建时就不需要再下载了。
       # 缓存路径 = <GRADLE_USER_HOME>/wrapper/dists/gradle-<ver>-bin/<md5(url) 的 base36>，
@@ -84,7 +86,7 @@ jobs:
           set -euo pipefail
           props=android/gradle/wrapper/gradle-wrapper.properties
           version=$(grep -oE 'gradle-[0-9][0-9.]*(-(all|bin))?\.zip' "$props" | head -1 | sed -E 's/^gradle-([0-9][0-9.]*).*/\1/')
-          url="https://services.gradle.org/distributions/gradle-${version}-bin.zip"
+          url="https://downloads.gradle.org/distributions/gradle-${version}-bin.zip"
           hash=$(python3 - "$url" <<'PY'
           import hashlib
           import sys
@@ -103,7 +105,9 @@ jobs:
           mkdir -p "$root"
           zip="$root/gradle-${version}-bin.zip"
           ok=0
-          for host in services.gradle.org downloads.gradle.org; do
+          # services.gradle.org 会 307 到 GitHub Releases（就是 504 的来源），
+          # 所以只试 Gradle 自己的 CDN；两个域名都指同一个对象存储，互为备份。
+          for host in downloads.gradle.org services.gradle.org; do
             if curl -fL --retry 4 --retry-all-errors --retry-delay 3 \
                 --connect-timeout 20 --max-time 600 \
                 -o "$zip" "https://${host}/distributions/gradle-${version}-bin.zip"; then
