@@ -110,6 +110,13 @@ class L10n {
           'tried pairing automatically; if it still fails, remove the headset in Windows Bluetooth '
           'settings, pair it again, then tap Connect my headphones.',
     },
+    'device.errNoAnswer': {
+      'zh': '耳机收到了命令但没有回包（通道 {service}）。应用已经按抓包顺序把每个可写服务都试过一遍；'
+          '如果一直这样，先在系统蓝牙里取消配对再重连一次，或到「实验室」把 TX/RX 记录发我。',
+      'en': 'The headset got the command but never answered (channel {service}). Every writable '
+          'service was already tried in capture order; if it keeps happening, unpair and re-pair '
+          'in system Bluetooth, or copy the TX/RX log from Lab and send it over.',
+    },
     'settings.pair': {'zh': '配对耳机', 'en': 'Pair headset'},
     'settings.pairOk': {'zh': '已配对（LE bonding 完成）', 'en': 'Paired (LE bonding done)'},
     'settings.pairFail': {'zh': '系统拒绝了配对，先按提示在 Windows 里删掉再重配', 'en': 'Windows refused pairing; remove and re-pair it in Bluetooth settings'},

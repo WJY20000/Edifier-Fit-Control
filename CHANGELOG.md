@@ -1,5 +1,80 @@
 # 更新记录
 
+## 0.8.3 — 2026-10-19
+
+「不止降噪，上次啥都没读出来」—— 找到了一个更底层的 bug：**所有通知都被丢掉了**。
+
+### 根因：Android 回包里的地址是大写
+
+`UniversalBle.onValueChange` 在 Android 上给的是
+`BluetoothDevice.address`，形如 `6C:16:29:E7:B5:41`（**大写**）；
+而内置常量、偏好里存的是小写 `6c:16:29:e7:b5:41`。
+`Session` 里用的是裸 `==`：
+
+```dart
+if (value.deviceId != current.deviceId) return;   // 永远不相等
+```
+
+于是每一帧回包都在这里被扔掉了：电池、降噪、音效、LDAC 全部「无应答」。
+Windows 侧插件（`mac_address_to_str`）恰好是小写，所以只有 Android 中招。
+自动重连用的又是内置的小写常量，因此每次都会踩到。
+
+### 修复
+
+- 新增 `BleController.sameAddress()` / `sameUuid()`：
+  地址按 `normalizeAddress` 归一（大小写、短横线、纯十六进制、空格都兼容），
+  UUID 忽略大小写、花括号与空白。
+- `Session.onValueChange` 与断线监听改用这两个函数；
+  `connectTo` 的「已连接就不重连」、`_learnAddress` 的比较也一并归一。
+- 设备页在「没有回包」时给出可操作的提示，并显示实际使用的 GATT 通道。
+- 协商失败时日志会打出「本次共收到 N 帧通知」：N = 0 说明通知根本没进来
+  （订阅/通道/过滤问题），N > 0 说明耳机确实装了死，排查方向完全不同。
+- 上一版的改动都在：通道按可信度排序（`48097303` 永远最后）、逐通道回退、
+  订阅后等 250 ms、写入方式自动重试、电量查询重试。
+
+### 测试
+
+- `address_test.dart` 新增 4 个用例：大写 MAC / 短横线 / 纯十六进制都判为同一台，
+  不同设备与 null 判否；UUID 忽略大小写与花括号。
+
+## 0.8.2 — 2026-10-19
+
+CI 的 Gradle 504 还在，连接耳机后还多了一个「电池查询无应答，协商失败」。
+
+### 构建：不再依赖 GitHub Releases 下载 Gradle
+
+- 上一版以为 bootstrap 已经改掉了 `distributionUrl`，但 CI 日志里仍然是
+  `github.com/gradle/gradle-distributions/...`（只是 `-all` 变成了 `-bin`）。
+  这次不再依赖 bootstrap：`android.yml` 在生成 `android/` 之后**无条件重写**
+  wrapper 配置并 `cat` 出来，构建前再打印一次；源固定为 `services.gradle.org`
+  的 `-bin` 包。
+- wrapper 配置加上 Gradle 8.9+ 支持的 `retries=5` / `retryBackOffMs=3000`，
+  504 由 wrapper 自己退避重试。
+- 新增「预热」步骤：按 Gradle 的缓存规则
+  （`dists/gradle-<版本>-bin/<md5(url) 的 base36>`）先把分发包下载并解压好，
+  构建时根本不需要再联网；失败不影响构建（只是退化成在线下载）。
+
+### 连接：选错 GATT 通道导致「电池查询无应答」
+
+- 根因：耳机同时暴露控制服务（`48090001` 通知 / `48090002` 写）和受保护的
+  OTA / 工厂口 `48097303-…`。上一版配对成功之后两个服务都能枚举出来，
+  `pickGatt` 取「第一个 4809 服务」，有可能拿到 OTA 口：写进去的命令
+  永远没有回包，于是协商在第一次电量查询就失败。
+- `BleController.gattCandidates()` 改成按可信度排序：抓包确认的
+  `48090002` + `48090001` 最高，`48090000` 次之，`48097303` 永远排最后。
+- `Session.connectTo()` 依次尝试候选通道：一个不回包就退订、换下一个，
+  直到有一个能完成协商；最后一个保留给「实验室」手动排障。
+- 订阅通知后等 250 ms 再发第一条命令（Android 上 CCCD 写完到真正开始推送
+  有几十毫秒空窗，第一条命令偶尔会被丢掉）。
+- 写入失败时自动换 `write` / `writeWithoutResponse` 再试一次。
+- 电量查询没回包时再问一次；两次都没有才算这个帧格式不对。
+- 协商日志第一行会打印 service / write / notify 三个 UUID，方便对不上时排查。
+
+### 测试
+
+- `ui_smoke_test` 的 `scrollUntilVisible` 显式指定滚动容器：设置页的地址输入框
+  自带一个横向 `Scrollable`，不指定会同时匹配到两个而直接报错。
+
 ## 0.8.1 — 2026-11-08
 
 CI 上的两个红灯：一次 APK 构建失败（Gradle 504），以及 4 个失败的测试。

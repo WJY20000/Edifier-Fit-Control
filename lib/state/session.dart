@@ -108,7 +108,8 @@ class Session extends ChangeNotifier {
       notifyListeners();
     });
     _disconnectSub = ble.disconnects.listen((change) {
-      if (change.deviceId != deviceId) return;
+      // 不能用 ==：Android 回调给的是大写 MAC，内置地址是小写。
+      if (!BleController.sameAddress(change.deviceId, deviceId)) return;
       if (_intentionalDisconnect) return;
       // 主动断开时事件可能晚于 _intentionalDisconnect 复位到达，
       // 此时本地已经清干净，再报「已断开」会弹出误导性的提示。
@@ -124,8 +125,11 @@ class Session extends ChangeNotifier {
     UniversalBle.onValueChange = (value) {
       final current = link;
       if (current == null) return;
-      if (value.deviceId != current.deviceId) return;
-      if (value.characteristicId.toLowerCase() != current.gatt.notify.toLowerCase()) return;
+      // 这两处以前都是裸 `==` 比较。Android 的 deviceId 是
+      // `BluetoothDevice.address`（大写），特征值也可能带花括号，
+      // 于是每一帧回包都在这里被丢掉 —— 表现就是「什么都没读出来」。
+      if (!BleController.sameAddress(value.deviceId, current.deviceId)) return;
+      if (!BleController.sameUuid(value.characteristicId, current.gatt.notify)) return;
       if (!_notifications.isClosed) _notifications.add(value.value);
     };
 
@@ -164,14 +168,17 @@ class Session extends ChangeNotifier {
     final mine = list.where((d) => d.mine).toList();
     if (mine.isEmpty) return;
     final id = mine.first.id;
-    if (targetMac == id) return;
+    // Android 扫描结果是大小写混杂的 MAC，用归一化比较，避免每次扫描都重写一遍。
+    if (BleController.sameAddress(targetMac, id)) return;
     // 只覆盖「内置值 / 经典地址 / 空」，别把用户手动固定成别的设备改掉。
     final auto = targetMac == null ||
-        targetMac == kMyHeadsetBleMac ||
-        targetMac == kMyHeadsetClassicMac;
+        BleController.sameAddress(targetMac, kMyHeadsetBleMac) ||
+        BleController.sameAddress(targetMac, kMyHeadsetClassicMac);
     if (!auto) return;
-    targetMac = id;
-    _prefs?.setString(_kTargetMac, id);
+    // 存归一化之后的小写形式：Android 拿回来的可能是大写。
+    final canonical = BleController.normalizeAddress(id) ?? id;
+    targetMac = canonical;
+    _prefs?.setString(_kTargetMac, canonical);
   }
 
   void setLocale(String value) {
@@ -235,7 +242,7 @@ class Session extends ChangeNotifier {
 
   Future<void> connectTo(String id, String? name, {required bool auto}) async {
     if (phase == SessionPhase.connecting) return;
-    if (deviceId == id && connected) return;
+    if (BleController.sameAddress(deviceId, id) && connected) return;
     await _teardown(keepDevice: false);
     phase = SessionPhase.connecting;
     deviceId = id;
@@ -244,36 +251,75 @@ class Session extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final gatt = await ble.connect(id);
-      final bleLink = UniversalBleLink(
-        deviceId: id,
-        gatt: gatt,
-        notifications: _notifications.stream,
-      );
-      link = bleLink;
-      await bleLink.requestMtu(247);
-      await bleLink.subscribe();
-
+      final candidates = await ble.connectCandidates(id);
       final detected = Profiles.resolve(name);
-      final edifier = EdifierEngine(link: bleLink, profile: detected);
-      edifier.serviceUuid = gatt.service;
-      edifier.writeUuid = gatt.write;
-      edifier.notifyUuid = gatt.notify;
-      engine = edifier;
-      profile = detected;
-      _frameSub = edifier.frames.listen((_) => notifyListeners());
-      edifier.start();
+      NegotiationResult? negotiation;
 
-      // BLE 链路已经建立：即使协议没协商成功，也让用户能进实验室手动试。
-      phase = SessionPhase.connected;
-      _negotiation = await edifier.negotiate(deepProbe: deepProbe);
-      if (!_negotiation!.ok) {
-        lastError = _negotiation!.error ?? 'no answer';
+      // 一台耳机可能同时暴露「控制口」和「OTA / 工厂口」。选错了也不会报错，
+      // 只是写出去的命令永远没有回包 —— 所以一个通道谈不下来就换下一个。
+      for (var index = 0; index < candidates.length; index++) {
+        final gatt = candidates[index];
+        final bleLink = UniversalBleLink(
+          deviceId: id,
+          gatt: gatt,
+          notifications: _notifications.stream,
+        );
+        link = bleLink;
+
+        final edifier = EdifierEngine(link: bleLink, profile: detected);
+        edifier.serviceUuid = gatt.service;
+        edifier.writeUuid = gatt.write;
+        edifier.notifyUuid = gatt.notify;
+        engine = edifier;
+        profile = detected;
+        await _frameSub?.cancel();
+        _frameSub = edifier.frames.listen((_) => notifyListeners());
+        edifier.start();
+
+        // BLE 链路已经建立：即使协议没协商成功，也让用户能进实验室手动试。
+        phase = SessionPhase.connected;
+        notifyListeners();
+
+        var attempt = NegotiationResult(
+          ok: false,
+          framing: edifier.framing,
+          responseHead: edifier.responseHead,
+          serviceUuid: gatt.service,
+          writeUuid: gatt.write,
+          notifyUuid: gatt.notify,
+          error: 'no answer',
+        );
+        try {
+          await bleLink.requestMtu(247);
+          await bleLink.subscribe();
+          attempt = await edifier.negotiate(deepProbe: deepProbe);
+        } catch (error) {
+          attempt = NegotiationResult(
+            ok: false,
+            framing: edifier.framing,
+            responseHead: edifier.responseHead,
+            serviceUuid: gatt.service,
+            writeUuid: gatt.write,
+            notifyUuid: gatt.notify,
+            error: '$error',
+          );
+        }
+        negotiation = attempt;
+        if (attempt.ok) break;
+        // 最后一个候选留着（不 dispose / 不退订），实验室还能手动发帧排障。
+        if (index == candidates.length - 1) break;
+        await bleLink.unsubscribe();
+        await edifier.dispose();
+      }
+
+      _negotiation = negotiation;
+      if (negotiation == null || !negotiation.ok) {
+        lastError = negotiation?.error ?? 'no answer';
         notifyListeners();
         return;
       }
 
-      peripheralName = edifier.state.name ?? name;
+      peripheralName = engine?.state.name ?? name;
       _prefs?.setString(_kLastId, id);
       _prefs?.setString(_kLastName, name ?? '');
       // 连通过一次就记住地址：以后哪怕扫不到，也能一键直连。

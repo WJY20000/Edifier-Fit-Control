@@ -187,8 +187,21 @@ class _EmptyState extends StatelessWidget {
                   style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
                   textAlign: TextAlign.center,
                 ),
-                // WinRT 报「Failed to get device」= 这个地址不是 BLE 地址。
-                // 原文对用户没有意义，补一句能动手的解释。
+                // 「无应答」= 命令发出去了，但一帧回包都没收到。
+                // 多半是选错了 GATT 通道（48097303 是 OTA 口），把实际通道打出来。
+                if (session.lastError!.toLowerCase().contains('did not answer')) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    l10n.t('device.errNoAnswer', {
+                      'service': session.negotiation?.serviceUuid ?? '—',
+                    }),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                      height: 1.55,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
                 if (session.lastError!.toLowerCase().contains('accessdenied')) ...[
                   const SizedBox(height: 8),
                   Text(
@@ -200,6 +213,8 @@ class _EmptyState extends StatelessWidget {
                     textAlign: TextAlign.center,
                   ),
                 ],
+                // WinRT 报「Failed to get device」= 这个地址不是 BLE 地址。
+                // 原文对用户没有意义，补一句能动手的解释。
                 if (session.lastError!.contains('Failed to get device')) ...[
                   const SizedBox(height: 8),
                   Text(

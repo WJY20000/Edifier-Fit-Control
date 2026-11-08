@@ -74,6 +74,11 @@ class EdifierEngine {
   /// 最近一次协商是否成功。
   bool ready = false;
 
+  /// 收到的通知帧总数。用来区分「耳机不回」和「回包没进来」：
+  /// 协商失败时如果是 0，说明通知链路本身有问题（订阅/通道/过滤），
+  /// 而不是耳机装死。
+  int receivedFrames = 0;
+
   List<LogEntry> get log => List<LogEntry>.unmodifiable(_log);
 
   /// 当前型号的音效预设表（Fit900NB Turbo 已按真机确认的顺序与名称）。
@@ -132,6 +137,7 @@ class EdifierEngine {
         final waiter = list.removeAt(0);
         if (!waiter.completer.isCompleted) waiter.completer.complete(decoded);
       }
+      receivedFrames++;
       if (!_frames.isClosed) _frames.add(decoded);
     }
   }
@@ -191,9 +197,17 @@ class EdifierEngine {
   /// 默认关闭，避免向未知固件发送不认识的控制字（部分型号会直接掉线）。
   Future<NegotiationResult> negotiate({bool deepProbe = false}) async {
     ready = false;
+    // 把通道写进日志：万一还是「无应答」，一眼就能看出是不是选错了服务。
+    _info(
+      '通道 service=${serviceUuid ?? '?'} write=${writeUuid ?? '?'} '
+      'notify=${notifyUuid ?? '?'}',
+    );
     await _probeFraming();
     if (!caps.battery) {
-      _info('电池查询无应答，协商失败');
+      _info(
+        '电池查询无应答，协商失败（本次共收到 $receivedFrames 帧通知'
+        '${receivedFrames == 0 ? '：一帧都没有，先查通道和订阅' : ''}）',
+      );
       return NegotiationResult(
         ok: false,
         framing: framing,
@@ -239,10 +253,18 @@ class EdifierEngine {
       tried.add(family);
       framing = candidate;
       _info('尝试帧格式 ${candidate.label}');
-      final frame = await request(
+      var frame = await request(
         Op.batteryGet,
         timeout: const Duration(milliseconds: 1200),
       );
+      if (frame == null || frame.payload.isEmpty) {
+        // 真机上连接后的第一条命令偶尔会被丢掉（CCCD 刚写完、耳机还没开始推）。
+        // 再问一次；两次都没回包才算这个帧格式不对。
+        frame = await request(
+          Op.batteryGet,
+          timeout: const Duration(milliseconds: 900),
+        );
+      }
       if (frame == null || frame.payload.isEmpty) continue;
 
       var value = frame.payload[0];

@@ -103,4 +103,42 @@ void main() {
       expect(BleController.isMyHeadset(device(name: 'EDIFIER BLE')), isFalse);
     });
   });
+
+  group('sameAddress / sameUuid：回调里的 ID 匹配', () {
+    test('Android 回调用大写 MAC，内置常量是小写，必须判为同一台', () {
+      expect(
+        BleController.sameAddress('6C:16:29:E7:B5:41', kMyHeadsetBleMac),
+        isTrue,
+      );
+    });
+
+    test('短横线 / 纯十六进制 / 带空格的写法都算同一台', () {
+      expect(
+        BleController.sameAddress('6C-16-29-E7-B5-41', '6c:16:29:e7:b5:41'),
+        isTrue,
+      );
+      expect(
+        BleController.sameAddress(' 6c1629e7b541 ', '6C:16:29:E7:B5:41'),
+        isTrue,
+      );
+    });
+
+    test('不同设备 / null 不算', () {
+      expect(
+        BleController.sameAddress('6C:16:29:E7:B5:14', kMyHeadsetBleMac),
+        isFalse,
+      );
+      expect(BleController.sameAddress(null, kMyHeadsetBleMac), isFalse);
+    });
+
+    test('特征值 UUID 忽略大小写与花括号', () {
+      const notify = '48090001-1a48-11e9-ab14-d663bd873d93';
+      expect(BleController.sameUuid(notify.toUpperCase(), notify), isTrue);
+      expect(BleController.sameUuid('{$notify}', notify), isTrue);
+      expect(
+        BleController.sameUuid('48090002-1a48-11e9-ab14-d663bd873d93', notify),
+        isFalse,
+      );
+    });
+  });
 }

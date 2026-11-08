@@ -41,15 +41,96 @@ jobs:
       - name: Generate Android platform folder
         run: dart tool/bootstrap.dart --platforms=android
 
+      # bootstrap 里已经改过一次；这里再无条件改一次并打印结果，
+      # 免得因为仓库里的 android/ 是旧的、或者模板又换回 GitHub Releases，
+      # 最后又去吃 504。Gradle 9 的 wrapper 支持 retries，一并写上。
+      - name: Point Gradle wrapper at the official CDN
+        shell: bash
+        run: |
+          set -euo pipefail
+          props=android/gradle/wrapper/gradle-wrapper.properties
+          if [ ! -f "$props" ]; then
+            echo "找不到 $props（bootstrap 没有生成 android/）" >&2
+            exit 1
+          fi
+          echo "--- bootstrap 之后 ---"
+          cat "$props"
+          version=$(grep -oE 'gradle-[0-9][0-9.]*(-(all|bin))?\.zip' "$props" | head -1 | sed -E 's/^gradle-([0-9][0-9.]*).*/\1/')
+          if [ -z "${version:-}" ]; then
+            version=9.3.1
+          fi
+          url="https://services.gradle.org/distributions/gradle-${version}-bin.zip"
+          {
+            echo 'distributionBase=GRADLE_USER_HOME'
+            echo 'distributionPath=wrapper/dists'
+            echo 'zipStoreBase=GRADLE_USER_HOME'
+            echo 'zipStorePath=wrapper/dists'
+            echo "distributionUrl=${url//:/\\:}"
+            echo 'networkTimeout=120000'
+            echo 'retries=5'
+            echo 'retryBackOffMs=3000'
+          } > "$props"
+          echo "--- 改写之后（Gradle ${version}）---"
+          cat "$props"
+          grep -q 'services.gradle.org' "$props"
+
+      # 把分发包直接放进 wrapper 的缓存目录，构建时就不需要再下载了。
+      # 缓存路径 = <GRADLE_USER_HOME>/wrapper/dists/gradle-<ver>-bin/<md5(url) 的 base36>，
+      # 和 Gradle 的 PathAssembler 一致；失败也不影响后面的构建（只是退化成在线下载）。
+      - name: Pre-seed the Gradle distribution (best effort)
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          props=android/gradle/wrapper/gradle-wrapper.properties
+          version=$(grep -oE 'gradle-[0-9][0-9.]*(-(all|bin))?\.zip' "$props" | head -1 | sed -E 's/^gradle-([0-9][0-9.]*).*/\1/')
+          url="https://services.gradle.org/distributions/gradle-${version}-bin.zip"
+          hash=$(python3 - "$url" <<'PY'
+          import hashlib
+          import sys
+
+          number = int.from_bytes(hashlib.md5(sys.argv[1].encode('utf-8')).digest(), 'big')
+          alphabet = '0123456789abcdefghijklmnopqrstuvwxyz'
+          out = ''
+          while number:
+              number, rest = divmod(number, 36)
+              out = alphabet[rest] + out
+          print(out or '0')
+          PY
+          )
+          root="${GRADLE_USER_HOME:-$HOME/.gradle}/wrapper/dists/gradle-${version}-bin/${hash}"
+          echo "预热目录：$root"
+          mkdir -p "$root"
+          zip="$root/gradle-${version}-bin.zip"
+          ok=0
+          for host in services.gradle.org downloads.gradle.org; do
+            if curl -fL --retry 4 --retry-all-errors --retry-delay 3 \
+                --connect-timeout 20 --max-time 600 \
+                -o "$zip" "https://${host}/distributions/gradle-${version}-bin.zip"; then
+              echo "下载成功：$host"
+              ok=1
+              break
+            fi
+          done
+          if [ "$ok" != "1" ]; then
+            echo "下载失败，跳过预热（构建时 wrapper 会自己重试）"
+            exit 0
+          fi
+          rm -rf "${root}/gradle-${version}"
+          unzip -q "$zip" -d "$root"
+          rm -f "$zip"
+          touch "${root}/gradle-${version}-bin.zip.ok"
+          ls -la "$root"
+
       - name: Resolve dependencies
         run: flutter pub get
 
       - name: Build release APK (arm64-v8a)
         shell: bash
         run: |
-          # Gradle wrapper 下载分发包时不会自己重试：GitHub Releases 偶尔回 504，
-          # 一次网络抖动就让整次构建失败（见 issue 里的 IOException: 504）。
-          # bootstrap 已经把它换成 services.gradle.org 的 -bin 包，这里再兜一层重试。
+          echo "--- 构建时实际使用的 wrapper 配置 ---"
+          cat android/gradle/wrapper/gradle-wrapper.properties
+          # wrapper 现在也会自己重试（retries=5）；这里再兜一层，防止极端抖动。
           for attempt in 1 2 3; do
             if flutter build apk --release --target-platform android-arm64; then
               echo "APK 构建成功（第 $attempt 次尝试）"

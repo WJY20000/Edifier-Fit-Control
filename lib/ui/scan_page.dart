@@ -393,10 +393,12 @@ class _DeviceTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = session.l10n;
     final theme = Theme.of(context);
-    final connecting =
-        session.phase == SessionPhase.connecting && session.deviceId == device.id;
-    final isCurrent = session.deviceId == device.id && session.connected;
-    final pinned = session.targetMac != null && session.targetMac == device.id;
+    // 地址比较一律归一：扫描结果与内置常量的字母大小写不一定一致。
+    final connecting = session.phase == SessionPhase.connecting &&
+        BleController.sameAddress(session.deviceId, device.id);
+    final isCurrent =
+        session.connected && BleController.sameAddress(session.deviceId, device.id);
+    final pinned = BleController.sameAddress(session.targetMac, device.id);
     final name = device.name?.isNotEmpty == true
         ? device.name!
         : l10n.t('scan.unknownDevice');

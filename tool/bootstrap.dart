@@ -140,17 +140,20 @@ void _patchAndroidGradle(Directory root) {
     return;
   }
   final version = match.group(1);
-  final url =
-      'https\\://services.gradle.org/distributions/gradle-$version-bin.zip';
-  text = text.replaceAll(
-    RegExp(r'^distributionUrl=.*$', multiLine: true),
-    'distributionUrl=$url',
+  // 整份重写，而不是只替换 distributionUrl：
+  // 这样即使模板以后又换回别的源、或者少了重试参数，构建机上也一定是这一份。
+  wrapper.writeAsStringSync(
+    'distributionBase=GRADLE_USER_HOME\n'
+    'distributionPath=wrapper/dists\n'
+    'zipStoreBase=GRADLE_USER_HOME\n'
+    'zipStorePath=wrapper/dists\n'
+    'distributionUrl=https\\://services.gradle.org/distributions/gradle-$version-bin.zip\n'
+    'networkTimeout=120000\n'
+    // Gradle 8.9+ 的 wrapper 自己会重试：5 次、3 秒起步的指数退避。
+    'retries=5\n'
+    'retryBackOffMs=3000\n',
   );
-  if (!text.contains('networkTimeout=')) {
-    text = '${text.trimRight()}\nnetworkTimeout=120000\n';
-  }
-  wrapper.writeAsStringSync(text);
-  print('==> gradle-wrapper.properties：改用 services.gradle.org（$version, -bin）');
+  print('==> gradle-wrapper.properties：改用 services.gradle.org（$version, -bin, retries=5）');
 }
 
 void _patchAndroidManifest(Directory root) {

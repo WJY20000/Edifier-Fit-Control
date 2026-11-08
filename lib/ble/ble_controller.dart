@@ -266,6 +266,31 @@ class BleController {
     ];
   }
 
+  /// 两个设备 ID 是否指向同一台设备。
+  ///
+  /// 必须用这个函数代替 `==`：Android 回调里给的是
+  /// `BluetoothDevice.address`，即**大写**形式（`6C:16:29:E7:B5:41`），
+  /// 而内置常量、偏好里存的是小写；Windows 侧又恰好是小写。
+  /// 直接比较字符串会把耳机的回包全部丢掉，界面上看起来就是
+  /// 「电池、降噪、音效……什么都没读出来」。
+  static bool sameAddress(String? a, String? b) {
+    if (a == null || b == null) return false;
+    final na = normalizeAddress(a) ?? a.trim().toLowerCase();
+    final nb = normalizeAddress(b) ?? b.trim().toLowerCase();
+    return na == nb;
+  }
+
+  /// 两个 UUID 是否相同（忽略大小写、花括号与空白）。
+  ///
+  /// 各平台对同一个特征值的写法不完全一致：Android 是
+  /// `48090001-1a48-11e9-ab14-d663bd873d93`，Windows 侧可能带花括号。
+  static bool sameUuid(String? a, String? b) {
+    if (a == null || b == null) return false;
+    String norm(String value) =>
+        value.trim().toLowerCase().replaceAll(RegExp(r'[{}\s]'), '');
+    return norm(a) == norm(b);
+  }
+
   /// 把用户输入的地址归一成平台使用的形式（小写、冒号分隔）。
   ///
   /// 支持 `AA:BB:CC:DD:EE:FF`、`AA-BB-...`、`aabbccddeeff`、
@@ -287,14 +312,14 @@ class BleController {
     return parts.join(':');
   }
 
-  /// 连接并发现 Edifier 通道。
+  /// 连接并发现 Edifier 通道（按可信度返回全部候选）。
   ///
   /// Windows 上这只耳机还暴露了一个**受保护的服务**
   /// （`48097303-1a48-11e9-ab14-d663bd873d93`）。插件的连接流程会逐个服务取特征，
   /// 只要有一个服务回 `AccessDenied`，它就会**整个连接失败**。
   /// 这种 AccessDenied 通常是「链路没加密」造成的，所以先配对（bonding）
   /// 再重连一次；配不上也只是原样报错。
-  Future<EdifierGatt> connect(
+  Future<List<EdifierGatt>> connectCandidates(
     String deviceId, {
     Duration timeout = const Duration(seconds: 20),
   }) async {
@@ -315,17 +340,31 @@ class BleController {
     }
   }
 
+  /// 只要最可信的那个通道（旧接口，保留给调用方）。
+  Future<EdifierGatt> connect(
+    String deviceId, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final candidates = await connectCandidates(deviceId, timeout: timeout);
+    return candidates.first;
+  }
+
   /// 单次连接 + 服务发现。
-  Future<EdifierGatt> _connectOnce(String deviceId, Duration timeout) async {
+  Future<List<EdifierGatt>> _connectOnce(String deviceId, Duration timeout) async {
     await UniversalBle.connect(deviceId, timeout: timeout);
     if (kDebugMode) debugPrint('[ble] connected $deviceId');
     final services = await UniversalBle.discoverServices(deviceId);
-    final gatt = pickGatt(services);
-    if (gatt == null) {
+    final candidates = gattCandidates(services);
+    if (candidates.isEmpty) {
       await UniversalBle.disconnect(deviceId);
       throw StateError('no writable + notifiable characteristic on this device');
     }
-    return gatt;
+    if (kDebugMode) {
+      for (final candidate in candidates) {
+        debugPrint('[ble] 候选通道：$candidate');
+      }
+    }
+    return candidates;
   }
 
   /// 这个错误是不是「服务需要加密链路」。
@@ -351,14 +390,16 @@ class BleController {
     }
   }
 
-  /// 从服务表里挑出写 / 通知通道。
+  /// 从服务表里挑出写 / 通知通道，按可信度从高到低排序。
   ///
-  /// 优先 Edifier 私有服务（4809…），其次任意同时具备 write 与 notify 的服务；
-  /// 这样即使型号换了 UUID 也能工作。
-  static EdifierGatt? pickGatt(List<BleService> services) {
-    EdifierGatt? preferred;
-    EdifierGatt? fallback;
-    for (final service in services) {
+  /// 关键：`48097303-…` 是耳机要求加密链路的 OTA / 工厂口，**不能**当控制通道用。
+  /// 往那里写命令不会得到任何回包，表现就是「电池查询无应答，协商失败」。
+  /// 真机抓包确认控制通道是 `48090002`（写）+ `48090001`（通知），
+  /// 所以优先认这两个特征值，其次才是 4809 前缀，最后才是任意能读写的服务。
+  static List<EdifierGatt> gattCandidates(List<BleService> services) {
+    final scored = <_GattCandidate>[];
+    for (var index = 0; index < services.length; index++) {
+      final service = services[index];
       String? write;
       String? notify;
       var writeWithResponse = true;
@@ -382,13 +423,37 @@ class BleController {
         notify: notify,
         writeWithResponse: writeWithResponse,
       );
-      if (isEdifierService(service.uuid)) {
-        preferred ??= candidate;
-      } else {
-        fallback ??= candidate;
-      }
+      scored.add(
+        _GattCandidate(_gattScore(service.uuid, write, notify), index, candidate),
+      );
     }
-    return preferred ?? fallback;
+    scored.sort((a, b) {
+      if (a.score != b.score) return b.score.compareTo(a.score);
+      return a.order.compareTo(b.order);
+    });
+    return <EdifierGatt>[for (final item in scored) item.gatt];
+  }
+
+  /// 给一个候选通道打分：越大越可能是真正的控制口。
+  static int _gattScore(String serviceUuid, String write, String notify) {
+    final service = serviceUuid.toLowerCase();
+    final w = write.toLowerCase();
+    final n = notify.toLowerCase();
+    // 受保护的 OTA / 工厂口：永远排最后。
+    if (service.startsWith('48097303')) return 0;
+    final knownWrite = w.startsWith('48090002');
+    final knownNotify = n.startsWith('48090001');
+    if (knownWrite && knownNotify) return 100;
+    if (service.startsWith('48090000')) return 90;
+    if (knownWrite || knownNotify) return 80;
+    if (isEdifierService(service)) return 50;
+    return 10;
+  }
+
+  /// 只要最可信的一个通道。
+  static EdifierGatt? pickGatt(List<BleService> services) {
+    final candidates = gattCandidates(services);
+    return candidates.isEmpty ? null : candidates.first;
   }
 
   /// 断开。
@@ -423,13 +488,29 @@ class UniversalBleLink implements EdifierLink {
 
   @override
   Future<void> write(List<int> data) async {
-    await UniversalBle.write(
-      deviceId,
-      gatt.service,
-      gatt.write,
-      Uint8List.fromList(data),
-      withoutResponse: !gatt.writeWithResponse,
-    );
+    final bytes = Uint8List.fromList(data);
+    try {
+      await UniversalBle.write(
+        deviceId,
+        gatt.service,
+        gatt.write,
+        bytes,
+        withoutResponse: !gatt.writeWithResponse,
+      );
+    } catch (error) {
+      // 个别固件把 write / writeWithoutResponse 标反了。换一种方式再试一次，
+      // 否则整条命令链都是「写失败」，界面看起来就是耳机不回话。
+      if (kDebugMode) {
+        debugPrint('[ble] write failed ($error), retry with the other mode');
+      }
+      await UniversalBle.write(
+        deviceId,
+        gatt.service,
+        gatt.write,
+        bytes,
+        withoutResponse: gatt.writeWithResponse,
+      );
+    }
   }
 
   /// 请求更大的 MTU；Android 有效，Windows 会忽略或抛 notSupported。
@@ -444,6 +525,9 @@ class UniversalBleLink implements EdifierLink {
 
   Future<void> subscribe() async {
     await UniversalBle.subscribeNotifications(deviceId, gatt.service, gatt.notify);
+    // CCCD 写完到耳机真正开始推送还有几十毫秒；立刻发第一条命令偶尔会被丢掉，
+    // 表现就是「电池查询无应答」。留一点余量，代价可以忽略。
+    await Future<void>.delayed(const Duration(milliseconds: 250));
   }
 
   Future<void> unsubscribe() async {
@@ -451,4 +535,17 @@ class UniversalBleLink implements EdifierLink {
       await UniversalBle.unsubscribe(deviceId, gatt.service, gatt.notify);
     } catch (_) {}
   }
+}
+
+/// [BleController.gattCandidates] 排序用的中间结果。
+class _GattCandidate {
+  _GattCandidate(this.score, this.order, this.gatt);
+
+  /// 可信度：100 = 抓包确认的控制特征，0 = 受保护的 OTA 口。
+  final int score;
+
+  /// 在原始服务表里的下标，用来保证同分时顺序稳定。
+  final int order;
+
+  final EdifierGatt gatt;
 }
