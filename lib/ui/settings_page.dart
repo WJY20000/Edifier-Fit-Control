@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_info.dart';
+import '../config.dart';
 import '../state/session.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -135,6 +136,13 @@ class SettingsPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
+        SectionCard(
+          title: l10n.t('settings.myDevice'),
+          icon: Icons.link_rounded,
+          subtitle: l10n.t('settings.myDeviceBody'),
+          child: _TargetMacEditor(session: session),
+        ),
+        const SizedBox(height: 14),
         // 开发者：头像 + 署名。整块只用静态资源，离线也正常显示。
         SectionCard(
           title: l10n.t('settings.developer'),
@@ -260,6 +268,116 @@ class _Avatar extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+
+/// 固定设备：输入 MAC，直接连，不扫描。
+class _TargetMacEditor extends StatefulWidget {
+  const _TargetMacEditor({required this.session});
+
+  final Session session;
+
+  @override
+  State<_TargetMacEditor> createState() => _TargetMacEditorState();
+}
+
+class _TargetMacEditorState extends State<_TargetMacEditor> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.session.targetMac ?? '');
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveAndConnect() async {
+    final session = widget.session;
+    final text = _controller.text.trim();
+    if (_busy) return;
+    setState(() => _busy = true);
+    final ok = await session.connectByAddress(text);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final l10n = session.l10n;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? l10n.t('settings.macSaved', {'mac': session.targetMac ?? text})
+              : (session.lastError ?? l10n.t('common.failed')),
+        ),
+      ),
+    );
+    // 连上之后地址会被归一化，输入框跟着刷新成平台用的形式。
+    final mac = session.targetMac;
+    if (mac != null) _controller.text = mac;
+  }
+
+  Future<void> _forget() async {
+    await widget.session.setTargetMac(null);
+    if (!mounted) return;
+    setState(() => _controller.clear());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = widget.session;
+    final l10n = session.l10n;
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _controller,
+          textCapitalization: TextCapitalization.characters,
+          decoration: InputDecoration(
+            labelText: l10n.t('settings.macLabel'),
+            hintText: 'AA:BB:CC:DD:EE:FF',
+            helperText: l10n.t('settings.macHelper'),
+            helperMaxLines: 2,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            FilledButton.icon(
+              onPressed: _busy ? null : _saveAndConnect,
+              icon: _busy
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.link_rounded, size: 17),
+              label: Text(l10n.t('settings.macConnect')),
+            ),
+            const SizedBox(width: 10),
+            if (session.targetMac != null)
+              TextButton.icon(
+                onPressed: _busy ? null : _forget,
+                icon: const Icon(Icons.link_off_rounded, size: 16),
+                label: Text(l10n.t('settings.macForget')),
+                style: TextButton.styleFrom(
+                  foregroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                ),
+              ),
+          ],
+        ),
+        if (session.targetMac?.toLowerCase() == kMyHeadsetMac) ...[
+          const SizedBox(height: 10),
+          Text(
+            l10n.t('settings.macPreset'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+              height: 1.5,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

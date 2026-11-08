@@ -43,6 +43,55 @@ class L10n {
     'scan.hint': {'zh': '提示：耳机需要先在系统里断开，才能被本应用连接。', 'en': 'Tip: disconnect the headphones from the system first so this app can connect.'},
     'scan.permission': {'zh': '需要蓝牙权限', 'en': 'Bluetooth permission required'},
     'scan.connect': {'zh': '连接', 'en': 'Connect'},
+    'scan.onlyEdifier': {'zh': '只看漫步者', 'en': 'EDIFIER only'},
+    'scan.sourceScan': {'zh': '蓝牙扫描', 'en': 'BLE scan'},
+    'scan.sourceSystem': {'zh': '系统设备', 'en': 'System devices'},
+    'scan.systemEmpty': {
+      'zh': '系统里没有已连接的蓝牙设备。耳机先用 Windows 连上，再回这里刷新。',
+      'en': 'No connected Bluetooth device in the system. Connect the headphones in Windows first, then refresh here.',
+    },
+    'scan.systemNote': {
+      'zh': '这里是 Windows 当前已连接的设备（不受广播影响），最适合耳机已经被系统占用的情况。',
+      'en': 'Devices Windows currently has connected (independent of advertising). Best when the headphones are already taken by the system.',
+    },
+    'scan.unknownDevice': {'zh': '未命名设备', 'en': 'Unnamed device'},
+    'scan.rawCount': {'zh': '未过滤 {n} 台', 'en': '{n} before filtering'},
+    'scan.macTitle': {'zh': '按 MAC 地址直连', 'en': 'Connect by address'},
+    'scan.mac': {'zh': 'MAC 直连', 'en': 'By address'},
+    'scan.macBody': {
+      'zh': '不扫描，直接连这个地址。耳机被 Windows 占着、不广播时，这是唯一可靠的办法。',
+      'en': 'Skip scanning and connect straight to this address. The only reliable way when Windows holds the headphones and they stop advertising.',
+    },
+    'scan.connectMine': {'zh': '连接我的耳机', 'en': 'Connect my headphones'},
+    'scan.winHint': {
+      'zh': 'Windows 上的 BLE 和经典蓝牙是两套。系统里连上了，不代表 BLE 侧也绑定了；'
+          '直连失败时，先在「蓝牙和设备」里删除这台耳机，再重新配对一次。',
+      'en': 'On Windows, BLE and classic Bluetooth are separate. A classic connection does not '
+          'mean the BLE side is bonded; if a direct connection fails, remove the headphones '
+          'in Bluetooth & devices and pair them again.',
+    },
+    'settings.macPreset': {
+      'zh': '已预填这台耳机的地址，直接点「保存并连接」即可。换耳机就在这里改。',
+      'en': 'Prefilled with this headset\'s address. Just tap Save & connect; edit it for another device.',
+    },
+    'scan.macInvalid': {
+      'zh': '格式不对，应该是 AA:BB:CC:DD:EE:FF 这种六段地址。',
+      'en': 'Invalid address. Use the six-part form AA:BB:CC:DD:EE:FF.',
+    },
+    'settings.myDevice': {'zh': '我的耳机', 'en': 'My headphones'},
+    'settings.myDeviceBody': {
+      'zh': '固定一台设备后，扫描不到也能直接连；下次启动会优先用它。',
+      'en': 'Pin one device: it can be connected even when scanning finds nothing, and it is used first on the next launch.',
+    },
+    'settings.macLabel': {'zh': 'MAC 地址', 'en': 'MAC address'},
+    'settings.macHelper': {
+      'zh': 'Windows：设置 → 蓝牙和设备 → 设备和打印机 → 右键耳机 → 属性 → 唯一标识符',
+      'en': 'Windows: Settings → Bluetooth & devices → Devices & printers → right-click the headphones → Properties → Unique identifier',
+    },
+    'settings.macConnect': {'zh': '保存并连接', 'en': 'Save & connect'},
+    'settings.macForget': {'zh': '取消固定', 'en': 'Unpin'},
+    'settings.macSaved': {'zh': '已固定 {mac}', 'en': 'Pinned {mac}'},
+    'device.connectMine': {'zh': '连接我的耳机', 'en': 'Connect my headphones'},
 
     'device.battery': {'zh': '电量', 'en': 'Battery'},
     'device.unknown': {'zh': '未知', 'en': 'Unknown'},

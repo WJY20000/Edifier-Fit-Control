@@ -162,6 +162,19 @@ class _EmptyState extends StatelessWidget {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
+              // 固定过地址就直接连：扫描靠广播，耳机被系统占住时扫不到很正常。
+              if (session.targetMac != null) ...[
+                _PinnedConnect(session: session),
+                const SizedBox(height: 10),
+                Text(
+                  session.targetMac!,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontFamily: 'monospace',
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
               FilledButton.icon(
                 onPressed: onGoScan,
                 icon: const Icon(Icons.bluetooth_searching_rounded, size: 18),
@@ -178,6 +191,47 @@ class _EmptyState extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 已固定地址时的一键直连：不扫描，直接向这个 MAC 发起 GATT 连接。
+class _PinnedConnect extends StatefulWidget {
+  const _PinnedConnect({required this.session});
+
+  final Session session;
+
+  @override
+  State<_PinnedConnect> createState() => _PinnedConnectState();
+}
+
+class _PinnedConnectState extends State<_PinnedConnect> {
+  bool _busy = false;
+
+  Future<void> _connect() async {
+    final mac = widget.session.targetMac;
+    if (mac == null || _busy) return;
+    setState(() => _busy = true);
+    await widget.session.connectByAddress(mac);
+    if (mounted) setState(() => _busy = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = widget.session.l10n;
+    return SizedBox(
+      width: 240,
+      child: FilledButton.icon(
+        onPressed: _busy ? null : _connect,
+        icon: _busy
+            ? const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+              )
+            : const Icon(Icons.link_rounded, size: 18),
+        label: Text(l10n.t('device.connectMine')),
       ),
     );
   }

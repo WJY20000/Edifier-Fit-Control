@@ -5,7 +5,12 @@ import '../state/session.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-/// 扫描页：列出附近的漫步者设备，点一下就连。
+/// 扫描页：找到并连上耳机。
+///
+/// 三条路，按可靠性从高到低：
+/// 1. 按 MAC 直连 —— 不依赖广播，耳机被系统占着也能连；
+/// 2. 系统已连接设备 —— WinRT 直接列出系统握着的设备；
+/// 3. 蓝牙扫描 —— 只有耳机在广播时才有结果。
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key, required this.session, required this.onConnected});
 
@@ -16,16 +21,91 @@ class ScanPage extends StatefulWidget {
   State<ScanPage> createState() => _ScanPageState();
 }
 
+enum _Source { scan, system }
+
 class _ScanPageState extends State<ScanPage> {
-  bool _showAll = false;
+  _Source _source = _Source.scan;
+
+  /// 默认 false：Windows 的广播里经常没有名字，先按「像不像漫步者」筛掉，
+  /// 就会出现「耳机在广播、列表却空着」的情况。默认全列，漫步者排最前。
+  bool _onlyEdifier = false;
+
+  List<DiscoveredDevice> _systemDevices = const [];
+  bool _loadingSystem = false;
+
+  Future<void> _loadSystem() async {
+    setState(() {
+      _source = _Source.system;
+      _loadingSystem = true;
+    });
+    final list = await widget.session.systemDevices();
+    if (!mounted) return;
+    setState(() {
+      _systemDevices = list;
+      _loadingSystem = false;
+    });
+  }
+
+  Future<void> _connectMac() async {
+    final session = widget.session;
+    final controller = TextEditingController(text: session.targetMac ?? '');
+    final input = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(session.l10n.t('scan.macTitle')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              session.l10n.t('scan.macBody'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(height: 1.5),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              autofocus: true,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(hintText: 'AA:BB:CC:DD:EE:FF'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text(session.l10n.t('common.cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+            child: Text(session.l10n.t('scan.connect')),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (input == null || input.isEmpty) return;
+    final ok = await session.connectByAddress(input);
+    if (!mounted) return;
+    if (ok) widget.onConnected();
+  }
+
+  Future<void> _connect(DiscoveredDevice device) async {
+    await widget.session.connect(device);
+    if (!mounted) return;
+    if (widget.session.connected) widget.onConnected();
+  }
 
   @override
   Widget build(BuildContext context) {
     final session = widget.session;
     final l10n = session.l10n;
     final theme = Theme.of(context);
-    final devices = session.devices;
     final scanning = session.ble.isScanning;
+    final all = session.devices;
+    final devices = _onlyEdifier
+        ? all.where((d) => d.looksLikeEdifier).toList()
+        : all;
+    final shown = _source == _Source.scan ? devices : _systemDevices;
 
     return Column(
       children: [
@@ -38,14 +118,12 @@ class _ScanPageState extends State<ScanPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      l10n.t('scan.title'),
-                      style: theme.textTheme.headlineSmall,
-                    ),
+                    Text(l10n.t('scan.title'), style: theme.textTheme.headlineSmall),
                     const SizedBox(height: 4),
                     Text(
-                      scanning
-                          ? l10n.t('scan.count', {'n': devices.length})
+                      _source == _Source.scan && scanning
+                          ? '${l10n.t('scan.count', {'n': shown.length})} · '
+                              '${l10n.t('scan.rawCount', {'n': all.length})}'
                           : l10n.t('scan.hint'),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
@@ -55,74 +133,134 @@ class _ScanPageState extends State<ScanPage> {
                 ),
               ),
               const SizedBox(width: 12),
-              if (scanning)
-                OutlinedButton.icon(
-                  onPressed: session.stopScan,
-                  icon: const Icon(Icons.stop_rounded, size: 18),
-                  label: Text(l10n.t('scan.stop')),
-                )
+              if (_source == _Source.scan)
+                scanning
+                    ? OutlinedButton.icon(
+                        onPressed: session.stopScan,
+                        icon: const Icon(Icons.stop_rounded, size: 18),
+                        label: Text(l10n.t('scan.stop')),
+                      )
+                    : FilledButton.icon(
+                        onPressed: () => session.startScan(),
+                        icon: const Icon(Icons.bluetooth_searching_rounded, size: 18),
+                        label: Text(l10n.t('scan.start')),
+                      )
               else
-                FilledButton.icon(
-                  onPressed: () => session.startScan(all: _showAll),
-                  icon: const Icon(Icons.bluetooth_searching_rounded, size: 18),
-                  label: Text(l10n.t('scan.start')),
+                OutlinedButton.icon(
+                  onPressed: _loadingSystem ? null : _loadSystem,
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: Text(l10n.t('common.retry')),
                 ),
             ],
           ),
         ),
+        // 来源切换 + 过滤（窄屏时允许换行，避免 390px 宽度下挤出边界）
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 18),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
-            decoration: BoxDecoration(
-              color: FitTheme.faint(context),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.filter_alt_outlined,
-                  size: 16,
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              SegmentedButton<_Source>(
+                showSelectedIcon: false,
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    l10n.t('scan.all'),
-                    style: theme.textTheme.bodySmall,
+                segments: [
+                  ButtonSegment(value: _Source.scan, label: Text(l10n.t('scan.sourceScan'))),
+                  ButtonSegment(
+                    value: _Source.system,
+                    label: Text(l10n.t('scan.sourceSystem')),
                   ),
-                ),
-                Switch(
-                  value: _showAll,
-                  onChanged: (value) {
-                    setState(() => _showAll = value);
-                    if (scanning) session.startScan(all: value);
-                  },
-                ),
-              ],
-            ),
+                ],
+                selected: {_source},
+                onSelectionChanged: (value) {
+                  if (value.first == _Source.system) {
+                    _loadSystem();
+                  } else {
+                    setState(() => _source = _Source.scan);
+                  }
+                },
+              ),
+              _MacButton(onPressed: _connectMac, label: l10n.t('scan.mac')),
+            ],
           ),
         ),
-        if (scanning) ...[
+        if (_source == _Source.scan)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+              decoration: BoxDecoration(
+                color: FitTheme.faint(context),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.filter_alt_outlined,
+                    size: 16,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(l10n.t('scan.onlyEdifier'), style: theme.textTheme.bodySmall),
+                  ),
+                  Switch(
+                    value: _onlyEdifier,
+                    onChanged: (value) => setState(() => _onlyEdifier = value),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        if (_source == _Source.scan && scanning) ...[
           const SizedBox(height: 6),
           const LinearProgressThin(value: null),
         ],
         Expanded(
-          child: devices.isEmpty
-              ? _Empty(scanning: scanning, text: l10n.t('scan.empty'))
+          child: shown.isEmpty
+              ? _Empty(
+                  scanning: _source == _Source.scan && scanning,
+                  text: _source == _Source.system
+                      ? l10n.t('scan.systemEmpty')
+                      : l10n.t('scan.empty'),
+                  macLabel: l10n.t('scan.mac'),
+                  onMac: _connectMac,
+                  pinnedMac: session.targetMac,
+                  pinnedLabel: l10n.t('scan.connectMine'),
+                  hint: l10n.t('scan.winHint'),
+                  onPinned: () async {
+                    final mac = session.targetMac;
+                    if (mac == null) return;
+                    final ok = await session.connectByAddress(mac);
+                    if (ok && mounted) widget.onConnected();
+                  },
+                )
               : ListView.separated(
                   padding: const EdgeInsets.fromLTRB(14, 14, 14, 28),
-                  itemCount: devices.length,
+                  itemCount: shown.length + (_source == _Source.system ? 1 : 0),
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {
-                    final device = devices[index];
+                    if (_source == _Source.system && index == 0) {
+                      return Padding(
+                        padding: const EdgeInsets.fromLTRB(4, 0, 4, 4),
+                        child: Text(
+                          l10n.t('scan.systemNote'),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            height: 1.5,
+                          ),
+                        ),
+                      );
+                    }
+                    final device = shown[_source == _Source.system ? index - 1 : index];
                     return _DeviceTile(
                       device: device,
                       session: session,
-                      onTap: () async {
-                        await session.connect(device);
-                        if (session.connected) widget.onConnected();
-                      },
+                      onTap: () => _connect(device),
                     );
                   },
                 ),
@@ -132,11 +270,47 @@ class _ScanPageState extends State<ScanPage> {
   }
 }
 
+class _MacButton extends StatelessWidget {
+  const _MacButton({required this.onPressed, required this.label});
+
+  final VoidCallback onPressed;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      icon: const Icon(Icons.keyboard_alt_outlined, size: 17),
+      label: Text(label, style: const TextStyle(fontSize: 12.5)),
+    );
+  }
+}
+
 class _Empty extends StatelessWidget {
-  const _Empty({required this.scanning, required this.text});
+  const _Empty({
+    required this.scanning,
+    required this.text,
+    required this.macLabel,
+    required this.onMac,
+    required this.pinnedMac,
+    required this.pinnedLabel,
+    required this.hint,
+    required this.onPinned,
+  });
 
   final bool scanning;
   final String text;
+  final String macLabel;
+  final VoidCallback onMac;
+
+  /// 已经固定过地址时，空列表里直接给一个「连它」的按钮 —— 扫描不到不代表连不上。
+  final String? pinnedMac;
+  final String pinnedLabel;
+  final String hint;
+  final VoidCallback onPinned;
 
   @override
   Widget build(BuildContext context) {
@@ -158,6 +332,43 @@ class _Empty extends StatelessWidget {
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
                 height: 1.55,
+              ),
+            ),
+            const SizedBox(height: 18),
+            if (pinnedMac != null) ...[
+              FilledButton.icon(
+                onPressed: onPinned,
+                icon: const Icon(Icons.link_rounded, size: 18),
+                label: Text(pinnedLabel),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                pinnedMac!,
+                style: theme.textTheme.labelSmall?.copyWith(
+                  fontFamily: 'monospace',
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
+            OutlinedButton.icon(
+              onPressed: onMac,
+              icon: const Icon(Icons.keyboard_alt_outlined, size: 17),
+              label: Text(macLabel),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: FitTheme.faint(context),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                hint,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                  height: 1.55,
+                ),
               ),
             ),
           ],
@@ -185,9 +396,10 @@ class _DeviceTile extends StatelessWidget {
     final connecting =
         session.phase == SessionPhase.connecting && session.deviceId == device.id;
     final isCurrent = session.deviceId == device.id && session.connected;
+    final pinned = session.targetMac != null && session.targetMac == device.id;
     final name = device.name?.isNotEmpty == true
         ? device.name!
-        : (device.id.length > 17 ? '${device.id.substring(0, 17)}…' : device.id);
+        : l10n.t('scan.unknownDevice');
 
     return Card(
       child: InkWell(
@@ -207,9 +419,7 @@ class _DeviceTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(13),
                 ),
                 child: Icon(
-                  device.looksLikeEdifier
-                      ? Icons.headphones_rounded
-                      : Icons.bluetooth_rounded,
+                  device.looksLikeEdifier ? Icons.headphones_rounded : Icons.bluetooth_rounded,
                   size: 21,
                   color: device.looksLikeEdifier
                       ? FitTheme.accentOf(context)
@@ -233,14 +443,33 @@ class _DeviceTile extends StatelessWidget {
                     const SizedBox(height: 5),
                     Row(
                       children: [
-                        SignalIcon(rssi: device.rssi),
-                        const SizedBox(width: 6),
-                        Text(
-                          '${device.rssi} dBm',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                        if (device.hasRssi) ...[
+                          SignalIcon(rssi: device.rssi),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${device.rssi} dBm',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
+                        // 地址永远显示：名字可能为空，地址才是能拿去直连的东西。
+                        Flexible(
+                          child: Text(
+                            device.id,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              fontFamily: 'monospace',
+                              color: theme.colorScheme.onSurface.withValues(alpha: 0.45),
+                            ),
                           ),
                         ),
+                        if (pinned) ...[
+                          const SizedBox(width: 6),
+                          Icon(Icons.push_pin_rounded, size: 12, color: FitColors.gold),
+                        ],
                         if (device.looksLikeEdifier) ...[
                           const SizedBox(width: 8),
                           Container(

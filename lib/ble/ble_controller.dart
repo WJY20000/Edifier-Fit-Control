@@ -6,15 +6,20 @@ import 'package:universal_ble/universal_ble.dart';
 
 import '../protocol/engine.dart';
 
-/// 扫描到的一台设备。
+/// 扫描到（或从系统里取到）的一台设备。
 class DiscoveredDevice {
   final String id;
   final String? name;
+
+  /// 信号强度；0 表示这台设备不是扫描来的，没有 RSSI。
   final int rssi;
   final List<String> services;
 
   /// 是否像漫步者（名字或厂商服务）。
   final bool looksLikeEdifier;
+
+  /// 来自「系统已连接设备」而不是扫描广播。
+  final bool fromSystem;
 
   const DiscoveredDevice({
     required this.id,
@@ -22,7 +27,10 @@ class DiscoveredDevice {
     required this.rssi,
     required this.services,
     required this.looksLikeEdifier,
+    this.fromSystem = false,
   });
+
+  bool get hasRssi => rssi != 0;
 }
 
 /// 一次连接里用到的 GATT 通道。
@@ -95,7 +103,9 @@ class BleController {
       final like = looksLikeEdifierName(device.name) ||
           services.any(isEdifierService) ||
           services.any((s) => s.toLowerCase() == '00003800-0000-1000-8000-00805f9b34fb');
-      if (!like && !showAll) return;
+      // 一律收下：Windows 的广播里经常没有名字（名字在另一条 GAP 记录里），
+      // 以前在这里就按「像不像漫步者」筛掉，结果耳机明明在广播、列表却是空的。
+      // 过滤改由界面上的「只看漫步者」开关做，原始列表保留下来还能排障。
       _devices[device.deviceId] = DiscoveredDevice(
         id: device.deviceId,
         name: device.name,
@@ -141,7 +151,7 @@ class BleController {
     return null;
   }
 
-  Future<void> startScan({bool all = false}) async {
+  Future<void> startScan({bool all = true}) async {
     if (_scanning) {
       await stopScan();
     }
@@ -170,6 +180,47 @@ class BleController {
   }
 
   bool get isScanning => _scanning;
+
+  /// 系统当前已连接的蓝牙设备（Windows: WinRT 的 Connected 设备集合）。
+  ///
+  /// 扫描靠的是广播，耳机被系统占用后往往不再广播，这时只能走这条路：
+  /// 它直接列出「系统已经握着」的设备，不依赖天线听不听得见。
+  Future<List<DiscoveredDevice>> systemDevices() async {
+    final list = await UniversalBle.getSystemDevices();
+    return [
+      for (final device in list)
+        DiscoveredDevice(
+          id: device.deviceId,
+          name: device.name,
+          rssi: 0,
+          services: device.services,
+          looksLikeEdifier: looksLikeEdifierName(device.name) ||
+              device.services.any(isEdifierService),
+          fromSystem: true,
+        ),
+    ];
+  }
+
+  /// 把用户输入的地址归一成平台使用的形式（小写、冒号分隔）。
+  ///
+  /// 支持 `AA:BB:CC:DD:EE:FF`、`AA-BB-...`、`aabbccddeeff`、
+  /// 以及 iOS/macOS 那种 UUID（原样返回）。解析不出来返回 null。
+  static String? normalizeAddress(String? input) {
+    if (input == null) return null;
+    final raw = input.trim();
+    if (raw.isEmpty) return null;
+    // 平台 UUID：8-4-4-4-12，原样（小写）返回。
+    if (RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+        .hasMatch(raw)) {
+      return raw.toLowerCase();
+    }
+    final hex = raw.replaceAll(RegExp(r'[^0-9a-fA-F]'), '').toLowerCase();
+    if (hex.length != 12) return null;
+    final parts = <String>[
+      for (var i = 0; i < 12; i += 2) hex.substring(i, i + 2),
+    ];
+    return parts.join(':');
+  }
 
   /// 连接并发现 Edifier 通道。
   Future<EdifierGatt> connect(String deviceId, {Duration timeout = const Duration(seconds: 20)}) async {

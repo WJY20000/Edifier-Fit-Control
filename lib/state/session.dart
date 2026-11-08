@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:universal_ble/universal_ble.dart';
 
 import '../ble/ble_controller.dart';
+import '../config.dart';
 import '../i18n/l10n.dart';
 import '../protocol/engine.dart';
 import '../protocol/frame.dart';
@@ -21,6 +22,8 @@ class Session extends ChangeNotifier {
   static const String _kAutoReconnect = 'autoReconnect';
   static const String _kLastId = 'lastDeviceId';
   static const String _kLastName = 'lastDeviceName';
+  static const String _kTargetMac = 'targetMac';
+  static const String _kMacCleared = 'targetMacCleared';
   static const Set<String> _themeModes = {'system', 'dark', 'light'};
 
   SharedPreferences? _prefs;
@@ -41,6 +44,9 @@ class Session extends ChangeNotifier {
   ModelProfile profile = Profiles.fit900nbTurbo;
 
   String? deviceId;
+
+  /// 用户固定下来的那台耳机（MAC）。扫描不到时可以直接连它。
+  String? targetMac;
   String? deviceName;
   String? peripheralName;
 
@@ -80,6 +86,12 @@ class Session extends ChangeNotifier {
     themeMode = _themeModes.contains(storedTheme) ? storedTheme! : 'system';
     deepProbe = _prefs?.getBool(_kDeepProbe) ?? false;
     autoReconnect = _prefs?.getBool(_kAutoReconnect) ?? true;
+    // 首次启动直接固定这台耳机：用户只有它，光等广播没有意义。
+    // 用户点过「取消固定」就尊重这个选择（_kMacCleared），不再自动填回去。
+    final storedMac = BleController.normalizeAddress(_prefs?.getString(_kTargetMac));
+    final macCleared = _prefs?.getBool(_kMacCleared) ?? false;
+    targetMac = storedMac ??
+        (macCleared ? null : BleController.normalizeAddress(kMyHeadsetMac));
 
     ble.installListeners();
     _scanSub = ble.scanResults.listen((list) {
@@ -111,12 +123,18 @@ class Session extends ChangeNotifier {
     notifyListeners();
 
     if (autoReconnect) {
-      final last = _prefs?.getString(_kLastId);
+      // 有固定地址就用它：它不依赖上一次扫描是否成功。
+      final last = targetMac ?? _prefs?.getString(_kLastId);
       if (last != null && last.isNotEmpty) {
+        // 固定地址优先用内置的名字：Windows 的 BLE 侧常常只有地址没有名字。
+        final name = _prefs?.getString(_kLastName) ??
+            (BleController.normalizeAddress(last) ==
+                    BleController.normalizeAddress(kMyHeadsetMac)
+                ? kMyHeadsetName
+                : null);
         // 静默重连：不阻塞启动，失败就停在「未连接」。
         unawaited(
-          connectTo(last, _prefs?.getString(_kLastName), auto: true)
-              .catchError((Object _) {}),
+          connectTo(last, name, auto: true).catchError((Object _) {}),
         );
       }
     }
@@ -224,12 +242,68 @@ class Session extends ChangeNotifier {
       peripheralName = edifier.state.name ?? name;
       _prefs?.setString(_kLastId, id);
       _prefs?.setString(_kLastName, name ?? '');
+      // 连通过一次就记住地址：以后哪怕扫不到，也能一键直连。
+      targetMac = BleController.normalizeAddress(id) ?? targetMac;
+      if (targetMac != null) _prefs?.setString(_kTargetMac, targetMac!);
       _startBatteryTimer();
       notifyListeners();
     } catch (error) {
       lastError = '$error';
       phase = SessionPhase.idle;
       notifyListeners();
+    }
+  }
+
+  /// 固定 / 取消固定这台耳机。
+  Future<void> setTargetMac(String? raw) async {
+    final mac = BleController.normalizeAddress(raw);
+    targetMac = mac;
+    // 偏好写入本身不用等（失败也不影响本次连接）。
+    if (mac == null) {
+      _prefs?.remove(_kTargetMac);
+      // 记住「是用户主动取消的」，否则下次启动又会被内置地址填回去。
+      _prefs?.setBool(_kMacCleared, true);
+    } else {
+      _prefs?.setString(_kTargetMac, mac);
+      _prefs?.remove(_kMacCleared);
+    }
+    notifyListeners();
+  }
+
+  /// 不扫描，直接连固定地址（也接受用户当场输入的地址）。
+  Future<bool> connectByAddress(String raw) async {
+    final mac = BleController.normalizeAddress(raw);
+    if (mac == null) {
+      lastError = l10n.t('scan.macInvalid');
+      notifyListeners();
+      return false;
+    }
+    // 直连同样要先拿到蓝牙权限并确认适配器开着（Android 12+ 必须）。
+    final problem = await ble.prepare();
+    if (problem != null) {
+      lastError = problem;
+      notifyListeners();
+      return false;
+    }
+    await setTargetMac(mac);
+    await connectTo(mac, null, auto: false);
+    return connected;
+  }
+
+  /// 系统当前已连接的设备（不依赖广播）。
+  Future<List<DiscoveredDevice>> systemDevices() async {
+    final problem = await ble.prepare();
+    if (problem != null) {
+      lastError = problem;
+      notifyListeners();
+      return const [];
+    }
+    try {
+      return await ble.systemDevices();
+    } catch (error) {
+      lastError = '$error';
+      notifyListeners();
+      return const [];
     }
   }
 
