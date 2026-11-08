@@ -1,0 +1,25 @@
+name: edifier_fit
+description: Cross-platform control panel for EDIFIER Fit900NB Turbo (Windows + Android).
+publish_to: "none"
+version: 0.5.0+5
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  universal_ble: 3.2.0
+  shared_preferences: ">=2.3.0 <3.0.0"
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/avatar.jpg

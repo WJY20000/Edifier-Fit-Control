@@ -1,0 +1,62 @@
+name: Android APK (arm64-v8a)
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # 3.47.x 是当前 stable；固定到具体补丁号，免得下个 stable 把模板换掉。
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform folder
+        run: dart tool/bootstrap.dart --platforms=android
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Build release APK (arm64-v8a)
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: Rename artifact
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             dist/EdifierFitControl-${{ github.run_number }}-arm64-v8a.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: edifier-fit-control-apk-arm64-v8a
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 90

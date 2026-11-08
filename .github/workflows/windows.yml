@@ -1,0 +1,63 @@
+name: Windows EXE (x64)
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  exe:
+    name: Build EXE
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable Windows Developer Mode (plugin symlinks)
+        shell: pwsh
+        run: |
+          $path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+          if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+          New-ItemProperty -Path $path -Name AllowDevelopmentWithoutDevLicense `
+            -Value 1 -PropertyType DWORD -Force | Out-Null
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+
+      - name: Generate Windows platform folder
+        run: dart tool/bootstrap.dart --platforms=windows
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Build release EXE
+        run: flutter build windows --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/windows/x64/runner/Release/* `
+            -DestinationPath EdifierFitControl-${{ github.run_number }}-windows-x64.zip
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: edifier-fit-control-windows-x64
+          path: EdifierFitControl-*-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 90

@@ -1,0 +1,9 @@
+# 刻意保持宽松：这是一个无本地 Flutter 环境、靠 CI 构建的小项目，
+# 只需要真正的编译错误拦住构建，风格问题不当作失败。
+analyzer:
+  errors:
+    deprecated_member_use: ignore
+    deprecated_member_use_from_same_package: ignore
+
+linter:
+  rules: []
