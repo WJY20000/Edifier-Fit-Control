@@ -288,8 +288,35 @@ class BleController {
   }
 
   /// 连接并发现 Edifier 通道。
-  Future<EdifierGatt> connect(String deviceId, {Duration timeout = const Duration(seconds: 20)}) async {
+  ///
+  /// Windows 上这只耳机还暴露了一个**受保护的服务**
+  /// （`48097303-1a48-11e9-ab14-d663bd873d93`）。插件的连接流程会逐个服务取特征，
+  /// 只要有一个服务回 `AccessDenied`，它就会**整个连接失败**。
+  /// 这种 AccessDenied 通常是「链路没加密」造成的，所以先配对（bonding）
+  /// 再重连一次；配不上也只是原样报错。
+  Future<EdifierGatt> connect(
+    String deviceId, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
     await stopScan();
+    try {
+      return await _connectOnce(deviceId, timeout);
+    } catch (error) {
+      if (!needsPairing(error)) rethrow;
+      if (kDebugMode) debugPrint('[ble] AccessDenied, pairing then retrying: $error');
+      // 上一次失败可能留下半开连接，先收干净再重来。
+      try {
+        await UniversalBle.disconnect(deviceId);
+      } catch (_) {}
+      await pair(deviceId);
+      // 系统配对完成后链路要几百毫秒才稳定，太急会又拿到 AccessDenied。
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      return _connectOnce(deviceId, timeout);
+    }
+  }
+
+  /// 单次连接 + 服务发现。
+  Future<EdifierGatt> _connectOnce(String deviceId, Duration timeout) async {
     await UniversalBle.connect(deviceId, timeout: timeout);
     if (kDebugMode) debugPrint('[ble] connected $deviceId');
     final services = await UniversalBle.discoverServices(deviceId);
@@ -299,6 +326,29 @@ class BleController {
       throw StateError('no writable + notifiable characteristic on this device');
     }
     return gatt;
+  }
+
+  /// 这个错误是不是「服务需要加密链路」。
+  static bool needsPairing(Object error) {
+    final text = '$error'.toLowerCase();
+    return text.contains('accessdenied') ||
+        text.contains('access denied') ||
+        text.contains('failed to get characteristics');
+  }
+
+  /// 让系统给这台设备做一次配对（BLE bonding）。
+  ///
+  /// Windows 11 走 `DeviceInformation.Pairing.PairAsync`（通常不弹窗）；
+  /// 其它平台不一定支持，失败就当没配对，不影响后续重连的报错。
+  Future<bool> pair(String deviceId) async {
+    try {
+      await UniversalBle.pair(deviceId);
+      if (kDebugMode) debugPrint('[ble] paired $deviceId');
+      return true;
+    } catch (error) {
+      if (kDebugMode) debugPrint('[ble] pair failed: $error');
+      return false;
+    }
   }
 
   /// 从服务表里挑出写 / 通知通道。

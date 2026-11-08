@@ -362,7 +362,10 @@ class _TargetMacEditorState extends State<_TargetMacEditor> {
           ),
         ),
         const SizedBox(height: 12),
-        Row(
+        Wrap(
+          spacing: 10,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             FilledButton.icon(
               onPressed: _busy ? null : _saveAndConnect,
@@ -375,7 +378,28 @@ class _TargetMacEditorState extends State<_TargetMacEditor> {
                   : const Icon(Icons.link_rounded, size: 17),
               label: Text(l10n.t('settings.macConnect')),
             ),
-            const SizedBox(width: 10),
+            // 控制服务在部分固件上要求加密链路：给一个手动配对入口，
+            // 自动配对失败时用户能自己再试一次。
+            if (session.targetMac != null)
+              TextButton.icon(
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        setState(() => _busy = true);
+                        final ok = await session.pairTarget();
+                        if (!mounted) return;
+                        setState(() => _busy = false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              l10n.t(ok ? 'settings.pairOk' : 'settings.pairFail'),
+                            ),
+                          ),
+                        );
+                      },
+                icon: const Icon(Icons.bluetooth_connected_rounded, size: 16),
+                label: Text(l10n.t('settings.pair')),
+              ),
             if (session.targetMac != null)
               TextButton.icon(
                 onPressed: _busy ? null : _forget,

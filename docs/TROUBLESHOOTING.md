@@ -68,9 +68,50 @@ Get-PnpDevice -Class BluetoothLE | Select-Object FriendlyName, InstanceId
 | 报错 | 含义 | 处理 |
 | --- | --- | --- |
 | `Failed to get device` | 这个地址在 Windows 的 BLE 栈里不存在 | 你填的是经典地址；用默认的 BLE 地址，或扫描一次让它自动学 |
+| `Failed to get characteristics for service 48097303…: AccessDenied` | 耳机暴露了一个**要求加密链路**的厂商服务，连接枚举到它就被拒 | 见下面「AccessDenied」一节 |
 | 连接超时 / `Unreachable` | 耳机被 Windows 当音频设备占着 | 先在系统里断开音频，再回来连 |
 | 连上但读不到数据 | GATT 通了但耳机不回包 | 看「实验室」的收发日志；只发不收 = 服务/特征值不对 |
 | 列表里连耳机都没有 | 没在广播 | 让耳机断开系统连接 / 重新进入配对模式，再扫一次 |
+
+## AccessDenied：为什么连上了却读不到服务
+
+```
+Failed to get characteristics for service
+48097303-1a48-11e9-ab14-d663bd873d93: AccessDenied
+```
+
+这不是地址问题，连接已经建立了。问题在于：
+
+1. 这只耳机在 BLE 里除了控制服务（`48090001/48090002`）之外，还暴露了一个
+   **受保护的服务** `48097303-…`（多半是 OTA / 工厂测试口），
+   它的属性要求**加密链路（bonding）**；
+2. universal_ble 的 Windows 实现是**逐个服务**取特征值的：
+   ```cpp
+   for (GattDeviceService &&service : gatt_services) {
+     characteristics_result = co_await service.GetCharacteristicsAsync(Uncached);
+     if (失败) { gatt_discovery_error = ...; break; }   // 整个连接判失败
+   }
+   ```
+   只要这一个服务被拒，**整个连接就失败** —— 剩下能用的服务它也拿不到。
+
+### 应用的处理（0.8.0）
+
+- 连接失败且错误含 `AccessDenied` / `Failed to get characteristics` 时，
+  先 `UniversalBle.pair()` 让 Windows 做一次 **LE bonding**，再重连一次；
+- 设置 →「我的耳机」有「**配对耳机**」按钮，可以手动触发；
+- 配对成功一次后 Windows 会记住密钥，之后连就不再被拒。
+
+### 还是不行时
+
+1. 设置 → 蓝牙和设备 → 这台耳机 → **删除设备**；
+2. 让耳机进入配对模式，重新配对（这次 Windows 会同时建经典 + LE 绑定）；
+3. 回到应用点「连接我的耳机」，或设置里点「配对耳机」后再连。
+
+> 如果你**从来没有**让 Windows 走过 LE 配对，系统里就不会有 `BTHLE\DEV_6c1629e7b541`
+> 节点 —— 可以先用下面的命令确认：
+> ```powershell
+> Get-PnpDevice -Class BluetoothLE | Select-Object FriendlyName, InstanceId
+> ```
 
 ## 已知的平台限制
 

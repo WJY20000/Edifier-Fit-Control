@@ -189,6 +189,17 @@ class _EmptyState extends StatelessWidget {
                 ),
                 // WinRT 报「Failed to get device」= 这个地址不是 BLE 地址。
                 // 原文对用户没有意义，补一句能动手的解释。
+                if (session.lastError!.toLowerCase().contains('accessdenied')) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    l10n.t('device.errAccess'),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                      height: 1.55,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
                 if (session.lastError!.contains('Failed to get device')) ...[
                   const SizedBox(height: 8),
                   Text(

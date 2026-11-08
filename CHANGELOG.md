@@ -1,5 +1,24 @@
 # 更新记录
 
+## 0.8.0 — 2026-11-08
+
+地址对了、能连上了，卡在下一步：枚举服务时被一个受保护的服务拒绝。
+
+```
+Failed to get characteristics for service
+48097303-1a48-11e9-ab14-d663bd873d93: AccessDenied
+```
+
+- universal_ble 的 Windows 实现会**逐个服务**取特征值，任何一个服务回
+  `AccessDenied` 就 `break`，把整个连接判为失败 —— 而这只耳机正好暴露了一个
+  需要加密链路才能访问的厂商服务（`48097303…`，多半是 OTA/工厂口）。
+- 新增**自动配对再重连**：连接失败且错误是 `AccessDenied` /
+  `Failed to get characteristics` 时，先 `UniversalBle.pair()`
+  让 Windows 做一次 LE bonding，700 ms 后重连一次。
+- 设置 →「我的耳机」新增「配对耳机」按钮，可手动触发（自动失败时用）。
+- 设备页在 `AccessDenied` 时补一条人话说明：删掉设备重新配对再连。
+- 连接前先 `disconnect` 一次旧链路，避免上一次失败留下的半开连接。
+
 ## 0.7.1 — 2026-11-08
 
 退出就真的退出，不在后台留着。

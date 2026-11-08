@@ -339,6 +339,17 @@ class Session extends ChangeNotifier {
     return false;
   }
 
+  /// 手动让系统给固定地址做一次配对（LE bonding）。
+  ///
+  /// 耳机的控制服务在部分固件上要求加密链路，配对后才能读到特征值。
+  Future<bool> pairTarget() async {
+    final mac = targetMac;
+    if (mac == null) return false;
+    final ok = await ble.pair(mac);
+    notifyListeners();
+    return ok;
+  }
+
   /// 系统当前已连接的设备（不依赖广播）。
   Future<List<DiscoveredDevice>> systemDevices() async {
     final problem = await ble.prepare();

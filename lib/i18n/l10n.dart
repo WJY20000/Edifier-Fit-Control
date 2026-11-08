@@ -103,6 +103,16 @@ class L10n {
     'settings.macForget': {'zh': '取消固定', 'en': 'Unpin'},
     'settings.macSaved': {'zh': '已固定 {mac}', 'en': 'Pinned {mac}'},
     'device.connectMine': {'zh': '连接我的耳机', 'en': 'Connect my headphones'},
+    'device.errAccess': {
+      'zh': '耳机有个服务（48097303…）要求加密链路。应用已经自动尝试配对；还是不行的话，'
+          '去 Windows 设置 → 蓝牙和设备，把这台耳机「删除设备」再重新配对一次，然后回来点「连接我的耳机」。',
+      'en': 'One of the headset\'s services (48097303…) requires an encrypted link. The app already '
+          'tried pairing automatically; if it still fails, remove the headset in Windows Bluetooth '
+          'settings, pair it again, then tap Connect my headphones.',
+    },
+    'settings.pair': {'zh': '配对耳机', 'en': 'Pair headset'},
+    'settings.pairOk': {'zh': '已配对（LE bonding 完成）', 'en': 'Paired (LE bonding done)'},
+    'settings.pairFail': {'zh': '系统拒绝了配对，先按提示在 Windows 里删掉再重配', 'en': 'Windows refused pairing; remove and re-pair it in Bluetooth settings'},
     'device.errNoBle': {
       'zh': 'Windows 的 BLE 栈里没有这个地址。若填的是设备属性里的「唯一标识符」，那其实是经典蓝牙地址；'
           '让耳机广播一次（或扫描页里点一次扫描），应用会自动学会真正的 BLE 地址。',
