@@ -24,6 +24,9 @@ class _FitAppState extends State<FitApp> {
   final Session _session = Session();
   bool _ready = false;
 
+  /// 正在走退出流程：盖一层遮罩，别让用户以为窗口卡死了。
+  bool _quitting = false;
+
   /// 关闭窗口（Windows 右上角 ×、Alt+F4）时先断开耳机再退出，
   /// 而不是把进程留在后台占着蓝牙。
   AppLifecycleListener? _lifecycle;
@@ -32,8 +35,17 @@ class _FitAppState extends State<FitApp> {
   void initState() {
     super.initState();
     _lifecycle = AppLifecycleListener(
+      // 和「设置 → 退出应用」完全是同一条路径：断开耳机 → 结束进程。
+      // quitApp 内部有兜底定时器，清理卡住也会 exit(0)，不会留下后台进程。
       onExitRequested: () async {
-        await _session.shutdown();
+        if (mounted) setState(() => _quitting = true);
+        try {
+          await quitApp(_session);
+        } catch (_) {
+          // 兜底：不管清理过程中发生什么，都必须明确回答 exit。
+          // 引擎只认 `exit` 这一个答案，不回答（或抛异常）它就永远不关窗，
+          // 那正是「点了 × 进程还在」的根因。
+        }
         return AppExitResponse.exit;
       },
     );
@@ -72,11 +84,72 @@ class _FitAppState extends State<FitApp> {
             GlobalWidgetsLocalizations.delegate,
             GlobalCupertinoLocalizations.delegate,
           ],
+          // 退出遮罩放在 builder 里：它会盖住整个 Navigator，
+          // 不受当前在哪个分页影响。不在退出流程时原样返回，树结构不变。
+          builder: (context, child) {
+            final base = child ?? const SizedBox.shrink();
+            if (!_quitting) return base;
+            // 显式给 textDirection：Stack 的默认对齐是 AlignmentDirectional。
+            return Stack(
+              textDirection: TextDirection.ltr,
+              children: [
+                base,
+                const Positioned.fill(child: _QuitOverlay()),
+              ],
+            );
+          },
           home: _ready
               ? HomeShell(session: _session)
               : const _Boot(),
         );
       },
+    );
+  }
+}
+
+/// 退出时的遮罩：断开耳机要一两秒，给个明确的反馈。
+class _QuitOverlay extends StatelessWidget {
+  const _QuitOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    // builder 可能不在 Directionality / DefaultTextStyle 之下，
+    // 这里显式给一份，避免 Text 找不到祖先时断言失败。
+    return const Directionality(
+      textDirection: TextDirection.ltr,
+      child: Material(
+        color: Color(0xCC0C0F13),
+        child: DefaultTextStyle(
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            decoration: TextDecoration.none,
+          ),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                ),
+                SizedBox(height: 14),
+                Text(
+                  '正在断开耳机并退出…',
+                  style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Disconnecting and quitting…',
+                  style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w400),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

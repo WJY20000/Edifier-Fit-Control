@@ -4,6 +4,7 @@ import 'package:edifier_fit/protocol/engine.dart';
 import 'package:edifier_fit/protocol/models.dart';
 import 'package:edifier_fit/protocol/opcodes.dart';
 import 'package:edifier_fit/state/session.dart';
+import 'package:edifier_fit/ui/already_running.dart';
 import 'package:edifier_fit/ui/device_page.dart';
 import 'package:edifier_fit/ui/lab_page.dart';
 import 'package:edifier_fit/ui/scan_page.dart';
@@ -209,5 +210,26 @@ void main() {
     // 标题 + 按钮都叫「退出应用」，所以是两个。
     expect(find.text('退出应用'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('第二个实例：提示「程序已经在运行」，而不是进主界面', (tester) async {
+    tester.view.physicalSize = const Size(900, 760);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(const AlreadyRunningApp());
+    await tester.pumpAndSettle();
+
+    expect(find.text('程序已经在运行'), findsOneWidget);
+    expect(find.textContaining('任务管理器'), findsOneWidget);
+    expect(find.text('退出 / Quit'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('shutdown 幂等：重复调用不抛异常（关窗和退出按钮可能同时触发）', () async {
+    final session = Session();
+    await session.shutdown();
+    await session.shutdown();
+    expect(session.phase, SessionPhase.idle);
   });
 }

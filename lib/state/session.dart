@@ -563,15 +563,27 @@ class Session extends ChangeNotifier {
   ///
   /// 只做清理，不关 notifyListeners 之外的任何东西；
   /// 调用方（退出流程）负责真的结束进程。
-  Future<void> shutdown() async {
+  ///
+  /// 每一步都有超时：以前这里只有断开连接带 5 秒超时，停扫描是裸 await，
+  /// 一旦插件不回话，整个退出流程就永远停在这里，进程留在了后台。
+  ///
+  /// 可重复调用：窗口关闭和设置按钮可能同时触发，第二次返回同一个 Future，
+  /// 而不是立刻返回空 —— 否则先返回的那个调用方会在清理还没做完时就 exit(0)。
+  Future<void>? _shutdownFuture;
+
+  Future<void> shutdown() {
+    return _shutdownFuture ??= _shutdown();
+  }
+
+  Future<void> _shutdown() async {
     _scanTimer?.cancel();
     _scanTimer = null;
     _batteryTimer?.cancel();
     _batteryTimer = null;
     try {
-      await ble.stopScan();
+      await ble.stopScan().timeout(const Duration(seconds: 2));
     } catch (_) {
-      // 扫描没开或已经停了，不影响退出。
+      // 扫描没开 / 已经停了 / 插件不应答，都不影响退出。
     }
     final id = deviceId;
     // 先把「系统层面的断开」发出去：进程退出后 Windows 不会替我们收尾，
