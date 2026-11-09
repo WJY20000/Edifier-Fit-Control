@@ -30,10 +30,6 @@ class Op {
   /// 设置通道里 LDAC 的项 id：`[0x11, 0 关 / 1 44.1&48k / 2 96k]`
   static const int settingLdac = 0x11;
 
-  /// 旧固件的 LDAC 命令字（W820NB 一代）
-  static const int ldacLegacyGet = 0x48;
-  static const int ldacLegacySet = 0x49;
-
   /// 主动降噪 / 环境声
   static const int noiseSet = 0xC1;
   static const int noiseGet = 0xCC;
@@ -46,7 +42,7 @@ class Op {
   static const int firmwareGet = 0xC6;
 
   /// MAC 地址（社区记录为 0xC8，但 2026-11-08 的 Fit900 抓包里官方 App
-  /// 从没发过这条——它直接用系统 BLE 地址。对已验证型号不再发，避免未知命令。）
+  /// 从没发过这条——它直接用系统 BLE 地址。本应用不发，避免未知命令。）
   static const int macGet = 0xC8;
 
   /// 蓝牙名称
@@ -80,26 +76,13 @@ class Op {
   static const int promptVolumeShadow = 0xF9;
 }
 
-/// 降噪槽位（v2 方言的第一个 payload 字节）。
+/// 降噪槽位（v2 帧 payload 的第一个字节）。
 class AncSlot {
-  /// Fit900NB Turbo（固件 1.0.3）：1 深度 / 2 舒适 / 3 防风 / 4 环境声 / 5 关
+  /// Fit900NB Turbo（固件 1.0.3）：1 深度 / 2 舒适 / 3 防风 / 4 环境声 / 5 关。
+  ///
+  /// 读降噪（0xCC）不带参数；写降噪（0xC1）是 `[2F, 档位]`，
+  /// 切环境声时再带一个等级字节。
   static const int fit900 = 0x2F;
-
-  /// W860NB PRO：1 深度 / 2 舒适 / 3 防风 / 4 环境声 / 5 关
-  static const int w860 = 0x10;
-
-  /// 花再 Evo Pro、FitBuds Turbo：1–3 降噪 / 4 防风 / 5 环境声 / 6 关
-  static const int evo = 0x1B;
-
-  /// X5 Pro：1 降噪 / 2 环境声 / 3 关
-  static const int x5 = 0x17;
-}
-
-/// v1 降噪模式值。
-class AncV1 {
-  static const int off = 1;
-  static const int anc = 2;
-  static const int ambient = 3;
 }
 
 /// 场景（0x09 写入，0x08 回读）。Fit900NB Turbo 真机确认。

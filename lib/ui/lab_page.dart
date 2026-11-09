@@ -164,7 +164,7 @@ class _LabPageState extends State<LabPage> {
                 onTap: session.connected ? () => _send(Op.nameGet) : null,
               ),
               // 0xC8（MAC）不会出现在这里：Fit900 的抓包里官方 App 从未发过它，
-              // 对已验证型号发未知命令有风险，需要时可以在上面手动输入。
+              // 对这台耳机发未知命令有风险，需要时可以在上面手动输入。
               _Quick(
                 label: '0xCC · ANC',
                 onTap: session.connected ? () => _send(Op.noiseGet) : null,
@@ -263,16 +263,16 @@ class _LabPageState extends State<LabPage> {
           child: Row(
             children: [
               Text(
-                '${session.engine?.framing.name ?? '-'} · ${session.engine?.anc.name ?? '-'}',
+                '${session.engine?.framing.name ?? '-'} · 0x2F',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
               const Spacer(),
               TextButton.icon(
-                onPressed: session.probeNow,
+                onPressed: session.reread,
                 icon: const Icon(Icons.radar_rounded, size: 16),
-                label: Text(l10n.t('lab.deepProbe')),
+                label: Text(l10n.t('lab.reread')),
               ),
             ],
           ),

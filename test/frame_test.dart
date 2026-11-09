@@ -1,9 +1,9 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:edifier_fit/protocol/frame.dart';
 import 'package:edifier_fit/protocol/models.dart';
 import 'package:edifier_fit/protocol/opcodes.dart';
-import 'package:edifier_fit/protocol/profiles.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 构造设备回包（首字节 0xBB，校验按「整帧」计算）。
@@ -129,38 +129,33 @@ void main() {
     });
   });
 
-  group('型号与方言', () {
-    test('Fit900NB Turbo 名称归一化后命中专属档案', () {
-      expect(normalizeDeviceName('EDIFIER Fit900NB Turbo'), 'fit900nbturbo');
-      expect(Profiles.resolve('EDIFIER Fit900NB Turbo').id, 'fit900nb-turbo');
-      expect(Profiles.resolve('Fit900NB Turbo').id, 'fit900nb-turbo');
-      expect(Profiles.resolve('EDIFIER W830NB').id, 'w830nb');
-      expect(Profiles.resolve('WH-1000XM5').id, 'generic-edifier');
-    });
-
-    test('目标型号已按真机验证：只用 BES v2 + 0x2F 槽位', () {
-      expect(Profiles.fit900nbTurbo.framingOrder, [Framing.v2]);
-      expect(Profiles.fit900nbTurbo.ancCandidates, [AncDialect.slotFit900]);
-      expect(Profiles.fit900nbTurbo.verified, isTrue);
-      // 未知型号仍然保留「多试几种」的兜底
-      expect(Profiles.generic.framingOrder.length, greaterThan(1));
+  group('Fit900NB Turbo 的固定协议', () {
+    test('只支持这一只耳机：没有型号识别表', () {
+      // 0.8.7 起删掉了多型号档案，所有连接都按 Fit900NB Turbo 处理。
+      // 这里守住「文件名不再存在」这件事（改回多型号会立刻红）。
+      expect(File('lib/protocol/profiles.dart').existsSync(), isFalse);
     });
 
     test('真机抓包：0x2F 槽位的编解码', () {
-      const dialect = AncDialect.slotFit900;
-      expect(dialect.slot, 0x2F);
-      expect(dialect.encode(NoiseMode.deep), [0x2F, 1]);
-      expect(dialect.encode(NoiseMode.comfort), [0x2F, 2]);
-      expect(dialect.encode(NoiseMode.wind), [0x2F, 3]);
-      expect(dialect.encode(NoiseMode.off), [0x2F, 5]);
-      expect(dialect.decode(Uint8List.fromList([0x2F, 5])), NoiseMode.off);
-      expect(dialect.decode(Uint8List.fromList([0x2F, 1])), NoiseMode.deep);
-      expect(dialect.decode(Uint8List.fromList([0x2F, 3])), NoiseMode.wind);
-      // 环境声带等级：[2F, 04, level]
-      expect(dialect.decode(Uint8List.fromList([0x2F, 4, 1])), NoiseMode.ambient);
-      expect(dialect.supportsAmbientLevel, isTrue);
-      // 不能用别的槽位误判
-      expect(dialect.decode(Uint8List.fromList([0x1B, 1])), isNull);
+      expect(AncSlot.fit900, 0x2F);
+      expect(noisePayload(NoiseMode.deep), [0x2F, 1]);
+      expect(noisePayload(NoiseMode.comfort), [0x2F, 2]);
+      expect(noisePayload(NoiseMode.wind), [0x2F, 3]);
+      expect(noisePayload(NoiseMode.off), [0x2F, 5]);
+      // 环境声要带等级：[2F, 04, level]
+      expect(noisePayload(NoiseMode.ambient), [0x2F, 4, 2]);
+      expect(
+        noisePayload(NoiseMode.ambient, ambientLevel: AmbientLevel.vocal),
+        [0x2F, 4, 1],
+      );
+      expect(decodeNoise(Uint8List.fromList([0x2F, 5])), NoiseMode.off);
+      expect(decodeNoise(Uint8List.fromList([0x2F, 1])), NoiseMode.deep);
+      expect(decodeNoise(Uint8List.fromList([0x2F, 3])), NoiseMode.wind);
+      expect(decodeNoise(Uint8List.fromList([0x2F, 4, 1])), NoiseMode.ambient);
+      // 别的槽位 / 半截包一律不认
+      expect(decodeNoise(Uint8List.fromList([0x1B, 1])), isNull);
+      expect(decodeNoise(Uint8List.fromList([0x2F])), isNull);
+      expect(decodeNoise(Uint8List.fromList([])), isNull);
     });
 
     test('真机抓包：用真实字节验证一帧', () {
@@ -181,23 +176,10 @@ void main() {
           [0xAA, 0xEC, 0x09, 0x00, 0x01, 0x01, 0xA1]);
     });
 
-    test('0x1B 槽位的编解码', () {
-      const dialect = AncDialect.slotEvo;
-      expect(dialect.encode(NoiseMode.off), [0x1B, 6]);
-      expect(dialect.encode(NoiseMode.deep), [0x1B, 1]);
-      expect(dialect.decode(Uint8List.fromList([0x1B, 6])), NoiseMode.off);
-      expect(dialect.decode(Uint8List.fromList([0x1B, 1])), NoiseMode.deep);
-      expect(dialect.decode(Uint8List.fromList([0x1B, 2])), NoiseMode.deep);
-      expect(dialect.decode(Uint8List.fromList([0x1B, 5])), NoiseMode.ambient);
-      // 别的槽位不能被误读
-      expect(dialect.decode(Uint8List.fromList([0x10, 1])), isNull);
-    });
-
-    test('v1 方言支持环境声等级，v2 槽位不支持', () {
-      expect(AncDialect.v1.supportsAmbientLevel, isTrue);
-      expect(AncDialect.v1.encode(NoiseMode.ambient), [3]);
-      expect(AncDialect.v1.decode(Uint8List.fromList([3, 8])), NoiseMode.ambient);
-      expect(AncDialect.slotEvo.supportsAmbientLevel, isFalse);
+    test('音效预设就是真机确认的 6 组', () {
+      expect(EqPreset.fit900.map((p) => p.value).toList(), [2, 3, 1, 0, 4, 5]);
+      expect(EqPreset.fit900.first.labelKey, 'eq.vocal');
+      expect(EqPreset.fit900.last.labelKey, 'eq.audiophile');
     });
   });
 }

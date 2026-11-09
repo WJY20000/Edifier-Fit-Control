@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../config.dart';
 import '../protocol/engine.dart';
 import '../protocol/frame.dart';
 import '../protocol/models.dart';
@@ -28,10 +29,15 @@ class DevicePage extends StatelessWidget {
     final caps = engine.caps;
 
     final hero = _Hero(session: session);
-    final notice = session.profile.verified ? null : _UnverifiedBanner(session: session);
-    final noise = caps.noise
-        ? _NoiseCard(session: session, engine: engine)
-        : _HiddenNoiseCard(session: session);
+    // 连上了但耳机不回包（多半是 GATT 通道没选对，或通知没订阅上）：
+    // 给一条能照着做的提示，而不是让用户对着一堆「--」猜。
+    // 只在「这一轮读取已经失败」时显示 —— 刚连上、还没读完的那一两秒不算。
+    final negotiation = session.negotiation;
+    final notice = (negotiation != null && !negotiation.ok)
+        ? _NoReplyBanner(session: session)
+        : null;
+    // 只支持这一只耳机：降噪控件始终显示，不再按「探测到什么」来隐藏。
+    final noise = _NoiseCard(session: session, engine: engine);
     final eq = caps.soundEffect
         ? _SoundEffectCard(session: session, engine: engine)
         : null;
@@ -288,7 +294,7 @@ class _Hero extends StatelessWidget {
     final theme = Theme.of(context);
     final dark = FitTheme.isDark(context);
     final state = session.engine?.state;
-    final name = state?.name ?? session.deviceName ?? session.profile.displayName;
+    final name = state?.name ?? session.deviceName ?? kMyHeadsetName;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(22, 22, 20, 22),
@@ -363,46 +369,55 @@ class _Hero extends StatelessWidget {
   }
 }
 
-/// 未验证型号的细条提示，不再占一整张大卡。
-class _UnverifiedBanner extends StatelessWidget {
-  const _UnverifiedBanner({required this.session});
+/// 连上了但没读到电量：给一条可操作的提示。
+class _NoReplyBanner extends StatelessWidget {
+  const _NoReplyBanner({required this.session});
 
   final Session session;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = session.l10n;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
       decoration: BoxDecoration(
         color: FitColors.warning.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: FitColors.warning.withValues(alpha: 0.25)),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.science_outlined, size: 17, color: FitColors.warning),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  session.l10n.t('device.unverified'),
+          Row(
+            children: [
+              const Icon(Icons.portable_wifi_off_rounded, size: 17, color: FitColors.warning),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  l10n.t('device.noReply'),
                   style: theme.textTheme.labelLarge?.copyWith(
                     color: FitColors.warning,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  session.l10n.t('device.unverifiedBody'),
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  ),
-                ),
-              ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          Text(
+            l10n.t('device.noReplyBody'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              height: 1.45,
+            ),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: session.reread,
+              icon: const Icon(Icons.sync_rounded, size: 16),
+              label: Text(l10n.t('device.reread')),
             ),
           ),
         ],
@@ -474,7 +489,7 @@ class _NoiseCard extends StatelessWidget {
     final l10n = session.l10n;
     final theme = Theme.of(context);
     final state = engine.state;
-    final options = engine.anc.options;
+    const options = kNoiseOptions;
     final current = state.noise;
     final currentOption =
         options.where((o) => o.mode == current).toList();
@@ -532,7 +547,7 @@ class _NoiseCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      current == null ? l10n.t('device.noiseHidden') : l10n.t(_hintKey(current)),
+                      current == null ? l10n.t('device.noiseUnknown') : l10n.t(_hintKey(current)),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
                       ),
@@ -578,7 +593,6 @@ class _AmbientInline extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = session.l10n;
     final theme = Theme.of(context);
-    final fit900 = engine.anc == AncDialect.slotFit900;
     final current = engine.state.ambientLevel;
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
@@ -589,77 +603,24 @@ class _AmbientInline extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Text(
-                l10n.t('device.ambientLevel'),
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                ),
-              ),
-              const Spacer(),
-              if (!fit900)
-                Text(
-                  current == null ? l10n.t('device.unknown') : '${current > 0 ? '+' : ''}$current',
-                  style: theme.textTheme.labelMedium,
-                ),
-            ],
+          Text(
+            l10n.t('device.ambientLevel'),
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+            ),
           ),
           const SizedBox(height: 10),
-          if (fit900)
-            OptionGrid<int>(
-              values: AmbientLevel.all,
-              selected: current,
-              columns: 3,
-              labelOf: (value) => l10n.t(AmbientLevel.labelKey(value)),
-              sublabelOf: (value) => switch (value) {
-                AmbientLevel.vocal => l10n.t('ambient.vocalHint'),
-                AmbientLevel.background => l10n.t('ambient.backgroundHint'),
-                _ => l10n.t('ambient.balancedHint'),
-              },
-              onSelected: session.setAmbientLevel,
-            )
-          else
-            StepSelector(
-              min: -3,
-              max: 3,
-              value: current,
-              onChanged: session.setAmbientLevel,
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HiddenNoiseCard extends StatelessWidget {
-  const _HiddenNoiseCard({required this.session});
-
-  final Session session;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = session.l10n;
-    final theme = Theme.of(context);
-    return SectionCard(
-      title: l10n.t('device.noise'),
-      icon: Icons.noise_control_off_rounded,
-      subtitle: session.profile.verified ? null : session.profile.evidence,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            l10n.t('device.noiseHidden'),
-            style: theme.textTheme.bodyMedium?.copyWith(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 14),
-          FilledButton.tonalIcon(
-            onPressed: session.probeNow,
-            icon: const Icon(Icons.radar_rounded, size: 18),
-            label: Text(l10n.t('device.deepProbeNow')),
+          OptionGrid<int>(
+            values: AmbientLevel.all,
+            selected: current,
+            columns: 3,
+            labelOf: (value) => l10n.t(AmbientLevel.labelKey(value)),
+            sublabelOf: (value) => switch (value) {
+              AmbientLevel.vocal => l10n.t('ambient.vocalHint'),
+              AmbientLevel.background => l10n.t('ambient.backgroundHint'),
+              _ => l10n.t('ambient.balancedHint'),
+            },
+            onSelected: session.setAmbientLevel,
           ),
         ],
       ),
@@ -696,7 +657,7 @@ class _SoundEffectCard extends StatelessWidget {
     final theme = Theme.of(context);
     final presets = engine.eqPresets;
     // 只有「场景不是音乐」时设备才会拒绝音效（回 0xFF）。之前的判断只看
-    // soundEffect 是否为空，协商时没读到就会把音乐场景下的控件也锁死，
+    // soundEffect 是否为空，读取时没读到就会把音乐场景下的控件也锁死，
     // 还提示用户去切场景，方向完全反了。
     final locked = engine.state.soundEffect == null &&
         (engine.state.scene ?? Scene.music) != Scene.music;
@@ -880,7 +841,6 @@ class _AdvancedCard extends StatelessWidget {
                 state.mac ?? _macLike(session.deviceId) ?? '--',
               ),
               MapEntry(l10n.t('device.framing'), engine.framing.label),
-              MapEntry(l10n.t('device.ancDialect'), engine.anc.name),
               MapEntry(
                 l10n.t('device.service'),
                 session.negotiation?.serviceUuid ?? engine.serviceUuid ?? '--',
@@ -897,9 +857,9 @@ class _AdvancedCard extends StatelessWidget {
             runSpacing: 10,
             children: [
               OutlinedButton.icon(
-                onPressed: session.renegotiate,
+                onPressed: session.reread,
                 icon: const Icon(Icons.sync_rounded, size: 17),
-                label: Text(l10n.t('device.renegotiate')),
+                label: Text(l10n.t('device.reread')),
               ),
               OutlinedButton.icon(
                 onPressed: () => _rename(context, session),

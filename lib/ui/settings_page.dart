@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../app_info.dart';
-import '../platform/quit.dart';
 import '../config.dart';
+import '../platform/quit.dart';
 import '../state/session.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-/// 设置：语言、主题、探测策略、型号、开发者与关于。
+/// 设置：外观、语言、连接、型号说明、开发者与关于。
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.session});
 
@@ -59,6 +59,20 @@ class SettingsPage extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         SectionCard(
+          title: l10n.t('settings.connection'),
+          icon: Icons.bluetooth_connected_rounded,
+          child: SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: session.autoReconnect,
+            onChanged: session.setAutoReconnect,
+            title: Text(
+              l10n.t('settings.autoReconnect'),
+              style: theme.textTheme.bodyMedium,
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        SectionCard(
           title: l10n.t('settings.language'),
           icon: Icons.translate_rounded,
           child: SegmentedButton<String>(
@@ -73,35 +87,6 @@ class SettingsPage extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         SectionCard(
-          title: l10n.t('settings.deepProbe'),
-          icon: Icons.radar_rounded,
-          subtitle: l10n.t('settings.deepProbeBody'),
-          child: Column(
-            children: [
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: session.deepProbe,
-                onChanged: session.setDeepProbe,
-                title: Text(
-                  l10n.t('settings.deepProbeEnable'),
-                  style: theme.textTheme.bodyMedium,
-                ),
-              ),
-              const Divider(),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: session.autoReconnect,
-                onChanged: session.setAutoReconnect,
-                title: Text(
-                  l10n.t('settings.autoReconnect'),
-                  style: theme.textTheme.bodyMedium,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 14),
-        SectionCard(
           title: l10n.t('settings.model'),
           icon: Icons.headphones_rounded,
           subtitle: l10n.t('settings.modelBody'),
@@ -111,18 +96,14 @@ class SettingsPage extends StatelessWidget {
               Row(
                 children: [
                   Text(
-                    session.profile.displayName,
+                    kMyHeadsetName,
                     style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
                   ),
                   const Spacer(),
                   StatusChip(
-                    label: session.profile.verified
-                        ? l10n.t('device.verifiedShort')
-                        : l10n.t('settings.unverified'),
-                    color: session.profile.verified ? FitColors.success : FitColors.warning,
-                    icon: session.profile.verified
-                        ? Icons.verified_rounded
-                        : Icons.science_outlined,
+                    label: l10n.t('settings.singleModel'),
+                    color: FitColors.success,
+                    icon: Icons.verified_rounded,
                   ),
                 ],
               ),
@@ -135,7 +116,7 @@ class SettingsPage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  session.profile.evidence,
+                  l10n.t('settings.modelEvidence'),
                   style: theme.textTheme.bodySmall?.copyWith(color: muted, height: 1.5),
                 ),
               ),

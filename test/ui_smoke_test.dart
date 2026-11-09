@@ -1,10 +1,8 @@
 import 'dart:async';
 
 import 'package:edifier_fit/protocol/engine.dart';
-import 'package:edifier_fit/protocol/frame.dart';
 import 'package:edifier_fit/protocol/models.dart';
 import 'package:edifier_fit/protocol/opcodes.dart';
-import 'package:edifier_fit/protocol/profiles.dart';
 import 'package:edifier_fit/state/session.dart';
 import 'package:edifier_fit/ui/device_page.dart';
 import 'package:edifier_fit/ui/lab_page.dart';
@@ -31,9 +29,8 @@ class _NullLink implements EdifierLink {
 
 /// 造一个「已连接且能力齐全」的 session，用来跑界面烟囱测试。
 Session _connectedSession() {
-  final engine = EdifierEngine(link: _NullLink(), profile: Profiles.fit900nbTurbo);
-  engine.framing = Framing.v2;
-  engine.anc = AncDialect.slotFit900;
+  final engine = EdifierEngine(link: _NullLink());
+  engine.caps.battery = true;
   engine.caps.noise = true;
   engine.caps.ambientLevel = true;
   engine.caps.scene = true;
@@ -88,6 +85,8 @@ void main() {
     // 旧的开发者术语不该出现在首屏
     expect(find.textContaining('slotFit900'), findsNothing);
     expect(find.textContaining('FW 1.0.3'), findsNothing);
+    // 读取成功时不该出现「没有回包」的提示条
+    expect(find.text('耳机还没有回包'), findsNothing);
   });
 
   testWidgets('设备页（窄屏）：两栏变单栏，不溢出', (tester) async {
@@ -142,6 +141,36 @@ void main() {
     expect(find.text('41'), findsOneWidget);
     expect(find.text('电量'), findsOneWidget);
     expect(find.byType(CustomPaint), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('读取失败：顶部出现「没有回包」提示条，且带重读按钮', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final session = _connectedSession();
+    await tester.pumpWidget(
+      _host(DevicePage(session: session, onGoScan: () {})),
+    );
+    await tester.pump(const Duration(milliseconds: 900));
+    // 起初没有提示条。
+    expect(find.text('耳机还没有回包'), findsNothing);
+
+    // 链路不回包：读电量两次都超时 → 这一轮读取失败。
+    session.reread();
+    for (var i = 0; i < 8; i++) {
+      await tester.pump(const Duration(milliseconds: 500));
+    }
+    await tester.pumpWidget(
+      _host(DevicePage(session: session, onGoScan: () {})),
+    );
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('耳机还没有回包'), findsOneWidget);
+    expect(find.text('重新读取'), findsOneWidget);
+    // 降噪控件仍然在（只支持这一只耳机，不按读取结果隐藏）
+    expect(find.text('环境声'), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 

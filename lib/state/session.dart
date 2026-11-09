@@ -10,7 +10,6 @@ import '../i18n/l10n.dart';
 import '../protocol/engine.dart';
 import '../protocol/frame.dart';
 import '../protocol/models.dart';
-import '../protocol/profiles.dart';
 
 enum SessionPhase { idle, connecting, connected }
 
@@ -18,7 +17,6 @@ enum SessionPhase { idle, connecting, connected }
 class Session extends ChangeNotifier {
   static const String _kLocale = 'locale';
   static const String _kTheme = 'themeMode';
-  static const String _kDeepProbe = 'deepProbe';
   static const String _kAutoReconnect = 'autoReconnect';
   static const String _kLastId = 'lastDeviceId';
   static const String _kLastName = 'lastDeviceName';
@@ -41,7 +39,6 @@ class Session extends ChangeNotifier {
   SessionPhase phase = SessionPhase.idle;
   EdifierEngine? engine;
   UniversalBleLink? link;
-  ModelProfile profile = Profiles.fit900nbTurbo;
 
   String? deviceId;
 
@@ -61,7 +58,6 @@ class Session extends ChangeNotifier {
 
   String locale = 'zh';
   String themeMode = 'system';
-  bool deepProbe = false;
   bool autoReconnect = true;
 
   L10n get l10n => L10n(locale);
@@ -87,7 +83,6 @@ class Session extends ChangeNotifier {
     locale = L10n.supported.contains(storedLocale) ? storedLocale! : 'zh';
     final storedTheme = _prefs?.getString(_kTheme);
     themeMode = _themeModes.contains(storedTheme) ? storedTheme! : 'system';
-    deepProbe = _prefs?.getBool(_kDeepProbe) ?? false;
     autoReconnect = _prefs?.getBool(_kAutoReconnect) ?? true;
     // 首次启动直接固定这台耳机：用户只有它，光等广播没有意义。
     // 用户点过「取消固定」就尊重这个选择（_kMacCleared），不再自动填回去。
@@ -195,12 +190,6 @@ class Session extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setDeepProbe(bool value) {
-    deepProbe = value;
-    _prefs?.setBool(_kDeepProbe, value);
-    notifyListeners();
-  }
-
   void setAutoReconnect(bool value) {
     autoReconnect = value;
     _prefs?.setBool(_kAutoReconnect, value);
@@ -262,7 +251,6 @@ class Session extends ChangeNotifier {
 
     try {
       final candidates = await ble.connectCandidates(id);
-      final detected = Profiles.resolve(name);
       NegotiationResult? negotiation;
 
       // 不同的「写 + 通知」配对都试一遍：选错了不会报错，只是永远没有回包。
@@ -275,7 +263,8 @@ class Session extends ChangeNotifier {
         );
         link = bleLink;
 
-        final edifier = EdifierEngine(link: bleLink, profile: detected);
+        // 只支持这一只耳机：不识别型号，所有连接都按 Fit900NB Turbo 处理。
+        final edifier = EdifierEngine(link: bleLink);
         edifier.serviceUuid = gatt.service;
         edifier.writeUuid = gatt.write;
         edifier.notifyServiceUuid = gatt.notifyService;
@@ -284,12 +273,11 @@ class Session extends ChangeNotifier {
           edifier.logInfo(line);
         }
         engine = edifier;
-        profile = detected;
         await _frameSub?.cancel();
         _frameSub = edifier.frames.listen((_) => notifyListeners());
         edifier.start();
 
-        // BLE 链路已经建立：即使协议没协商成功，也让用户能进实验室手动试。
+        // BLE 链路已经建立：即使没读到有效回包，也让用户能进实验室手动试。
         phase = SessionPhase.connected;
         notifyListeners();
 
@@ -305,7 +293,7 @@ class Session extends ChangeNotifier {
         try {
           await bleLink.requestMtu(247);
           await bleLink.subscribe();
-          attempt = await edifier.negotiate(deepProbe: deepProbe);
+          attempt = await edifier.negotiate();
         } catch (error) {
           attempt = NegotiationResult(
             ok: false,
@@ -426,21 +414,14 @@ class Session extends ChangeNotifier {
     }
   }
 
-  Future<void> renegotiate() async {
-    final edifier = engine;
-    if (edifier == null) return;
-    _negotiation = await edifier.negotiate(deepProbe: deepProbe);
-    notifyListeners();
-  }
-
-  /// 无视设置，强制做一次包含控制项的深度探测。
-  Future<void> probeNow() async {
+  /// 重新读一遍电量、身份与控制项。
+  Future<void> reread() async {
     final edifier = engine;
     if (edifier == null) return;
     // 和控制命令共用一条队列：探测期间点选项会排队，不会两边抢通道。
     await _serialized(() async {
       try {
-        _negotiation = await edifier.negotiate(deepProbe: true);
+        _negotiation = await edifier.negotiate();
       } catch (error) {
         lastError = '$error';
       }
@@ -467,14 +448,14 @@ class Session extends ChangeNotifier {
     return previous.then((_) => task()).whenComplete(() => done.complete());
   }
 
-  /// 上一次「失败后自动重新协商」的时间，避免每次点击都触发一轮探测。
+  /// 上一次「失败后自动重新读取」的时间，避免每次点击都触发一轮。
   DateTime? _lastHeal;
 
-  /// 先按当前协商结果执行；失败就自动重谈一次再试一遍。
+  /// 先按已知状态执行；失败就自动重新读一遍再试一次。
   ///
-  /// 真机上出现过「刚连上时点选项没反应，点一次深度探测之后就好了」：
-  /// 说明那次协商结果不可用（回包丢了 / 通知还没订阅上）。
-  /// 与其让用户自己去找「深度探测」，不如失败时自动补一次。
+  /// 真机上出现过「刚连上时点选项没反应，重新读一遍控制项之后就好了」：
+  /// 说明那一次读取没拿到回包（丢帧 / 通知还没订阅上）。
+  /// 与其让用户自己去点按钮，不如失败时自动补一次。
   Future<bool> _runOrHeal(Future<bool> Function(EdifierEngine engine) action) async {
     final edifier = engine;
     if (edifier == null) return false;
@@ -493,9 +474,7 @@ class Session extends ChangeNotifier {
     if (cooling) return false;
     _lastHeal = now;
     try {
-      // 已验证的型号才敢自动发「未验证的控制命令」；未验证的型号只做一次轻量重谈，
-      // 免得为了修一个控件而对未知固件乱发命令（部分型号会直接掉线）。
-      _negotiation = await edifier.negotiate(deepProbe: profile.verified);
+      _negotiation = await edifier.negotiate();
     } catch (_) {
       return false;
     }

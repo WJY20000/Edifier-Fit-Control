@@ -130,7 +130,6 @@ class L10n {
     'device.battery': {'zh': '电量', 'en': 'Battery'},
     'device.unknown': {'zh': '未知', 'en': 'Unknown'},
     'device.noise': {'zh': '降噪模式', 'en': 'Noise control'},
-    'device.noiseUnsupported': {'zh': '未探测到降噪控制。打开「深度探测」后重试。', 'en': 'Noise control was not detected. Enable deep probing and retry.'},
     'device.ambientLevel': {'zh': '环境声等级', 'en': 'Ambient level'},
     'device.eq': {'zh': '音效预设', 'en': 'Sound effect'},
     'device.ldac': {'zh': 'LDAC 编码', 'en': 'LDAC codec'},
@@ -142,20 +141,26 @@ class L10n {
     'device.renameHint': {'zh': '新的蓝牙名称（最多 30 字节）', 'en': 'New Bluetooth name (max 30 bytes)'},
     'device.protocol': {'zh': '协议', 'en': 'Protocol'},
     'device.framing': {'zh': '帧格式', 'en': 'Framing'},
-    'device.ancDialect': {'zh': '降噪方言', 'en': 'ANC dialect'},
     'device.service': {'zh': '服务 UUID', 'en': 'Service UUID'},
     'device.mtu': {'zh': 'MTU', 'en': 'MTU'},
-    'device.renegotiate': {'zh': '重新协商', 'en': 'Re-negotiate'},
+    'device.reread': {'zh': '重新读取', 'en': 'Re-read'},
+    'device.noReply': {'zh': '耳机还没有回包', 'en': 'No reply from the headphones'},
+    'device.noReplyBody': {
+      'zh': '连接已经建立，但没读到电量。多半是 GATT 通道没选对，或系统里还占着这条连接。'
+          '点右边的「重新读取」再试一次；仍然不行，就到系统蓝牙里断开耳机后重新连接。',
+      'en': 'The link is up, but the battery query got no answer. Usually the wrong GATT channel '
+          'or the headphones are still held by the system. Tap Re-read; if it still fails, '
+          'disconnect the headphones in the system Bluetooth settings and connect again.',
+    },
+    'device.noiseUnknown': {
+      'zh': '还没读到当前档位，点一下就能切换',
+      'en': 'Current mode not read yet — tap one to switch',
+    },
     'device.refresh': {'zh': '刷新电量', 'en': 'Refresh battery'},
     'device.disconnect': {'zh': '断开连接', 'en': 'Disconnect'},
     'device.powerOff': {'zh': '关闭耳机', 'en': 'Power off headphones'},
     'device.reset': {'zh': '恢复出厂设置', 'en': 'Factory reset'},
     'device.resetConfirm': {'zh': '确定要让耳机恢复出厂设置？这会清除配对信息。', 'en': 'Factory reset the headphones? This clears pairing information.'},
-    'device.unverified': {'zh': '该型号的协议尚未在真机验证', 'en': 'Protocol for this model is not verified on hardware'},
-    'device.unverifiedBody': {
-      'zh': '控制项按同代型号推断。若某项无效或连接掉线，请到「实验室」导出抓包并反馈。',
-      'en': 'Controls are inferred from sibling models. If something fails or the link drops, export a capture from the Lab.',
-    },
 
     'noise.deep': {'zh': '深度降噪', 'en': 'Deep ANC'},
     'noise.comfort': {'zh': '舒适降噪', 'en': 'Comfort ANC'},
@@ -187,7 +192,7 @@ class L10n {
     'lab.clear': {'zh': '清空', 'en': 'Clear'},
     'lab.copy': {'zh': '复制全部', 'en': 'Copy all'},
     'lab.copied': {'zh': '已复制到剪贴板', 'en': 'Copied to clipboard'},
-    'lab.deepProbe': {'zh': '深度探测（会发送未验证的控制命令）', 'en': 'Deep probing (sends unverified control commands)'},
+    'lab.reread': {'zh': '重新读取控制项', 'en': 'Re-read controls'},
     'lab.rawHint': {'zh': '格式：命令字节 + 数据，例如 CC 1B 或 D0', 'en': 'Format: command byte + data, e.g. CC 1B or D0'},
 
     'settings.title': {'zh': '设置', 'en': 'Settings'},
@@ -196,10 +201,14 @@ class L10n {
     'settings.themeSystem': {'zh': '跟随系统', 'en': 'System'},
     'settings.themeDark': {'zh': '深色', 'en': 'Dark'},
     'settings.themeLight': {'zh': '浅色', 'en': 'Light'},
-    'settings.deepProbe': {'zh': '连接时深度探测', 'en': 'Deep probe on connect'},
-    'settings.deepProbeBody': {
-      'zh': '关闭时只读取电量与设备信息，不发送任何控制命令。',
-      'en': 'When off, only battery and identity are read; no control commands are sent.',
+    'settings.connection': {'zh': '连接', 'en': 'Connection'},
+    'settings.singleModel': {'zh': '专一型号', 'en': 'Single model'},
+    'settings.modelEvidence': {
+      'zh': '本版本只支持 Fit900NB Turbo：任何设备连上都按这一型号处理 —— BES v2 明文帧、'
+          '降噪槽位 0x2F，所有命令均来自 2026-11-08 的真机抓包（固件 1.0.3）。不会识别或试探其他型号。',
+      'en': 'This build supports the Fit900NB Turbo only: every connection is treated as this model — '
+          'plaintext BES v2 frames, ANC slot 0x2F, all commands from the 2026-11-08 hardware capture '
+          '(firmware 1.0.3). No model detection, no probing of other models.',
     },
     'settings.autoReconnect': {'zh': '启动时重连上次设备', 'en': 'Reconnect last device on launch'},
     'settings.quit': {'zh': '退出应用', 'en': 'Quit'},
@@ -215,7 +224,6 @@ class L10n {
     },
     'settings.protocol': {'zh': '协议说明', 'en': 'Protocol notes'},
     'settings.version': {'zh': '版本', 'en': 'Version'},
-    'settings.deepProbeEnable': {'zh': '启用深度探测', 'en': 'Enable deep probing'},
     'settings.developer': {'zh': '开发者', 'en': 'Developer'},
     'settings.developerRole': {
       'zh': '独立开发者 · 界面与协议整理',
@@ -233,15 +241,6 @@ class L10n {
     },
     'device.goScan': {'zh': '去扫描', 'en': 'Go to Scan'},
     'device.signal': {'zh': '信号', 'en': 'Signal'},
-    'device.deepProbeNow': {'zh': '立即探测控制项', 'en': 'Probe controls now'},
-    'device.noiseHidden': {
-      'zh': '没有拿到降噪回读，控件已隐藏。点下面的按钮做一次深度探测。',
-      'en': 'No noise-control reply, so the controls stay hidden. Run a deep probe below.',
-    },
-    'device.ambientHint': {
-      'zh': '环境声等级用旧版命令字读取，仅在 v1 方言下开放。',
-      'en': 'Ambient level is only exposed for the legacy (v1) dialect.',
-    },
     'device.renameTitle': {'zh': '重命名耳机', 'en': 'Rename headphones'},
     'device.renameDone': {'zh': '已改名，重新连接后生效', 'en': 'Renamed — takes effect after reconnecting'},
     'device.manage': {'zh': '管理', 'en': 'Manage'},
@@ -286,7 +285,6 @@ class L10n {
     'ambient.balancedHint': {'zh': '自然通透', 'en': 'Natural' },
     'ambient.backgroundHint': {'zh': '保留环境氛围', 'en': 'More surroundings'},
     'device.connectedTo': {'zh': '当前设备', 'en': 'CURRENT DEVICE'},
-    'device.verifiedShort': {'zh': '真机验证', 'en': 'Verified'},
     'eq.vocal': {'zh': '人声', 'en': 'Vocal'},
     'eq.bass': {'zh': '低音增强', 'en': 'Bass boost'},
     'eq.dynamic': {'zh': '动感', 'en': 'Dynamic'},
@@ -305,7 +303,7 @@ class L10n {
     'lab.invalidHex': {'zh': '十六进制格式不对', 'en': 'Invalid hex'},
     'lab.emptyLog': {'zh': '还没有收发记录。', 'en': 'No traffic yet.'},
     'lab.note': {
-      'zh': '这里发送的字节按当前协商到的帧格式封装，不做校验重试。乱发命令有可能让耳机断开，这是正常的。',
+      'zh': '这里发送的字节按 Fit900NB Turbo 的明文 v2 帧封装，不做校验重试。乱发命令有可能让耳机断开，这是正常的。',
       'en': 'Bytes are wrapped in the negotiated framing, without retries. An unknown command may drop the link — that is expected.',
     },
     'lab.logSize': {'zh': '{n} 条', 'en': '{n} entries'},
@@ -320,10 +318,9 @@ class L10n {
 
     'settings.model': {'zh': '目标型号', 'en': 'Target model'},
     'settings.modelBody': {
-      'zh': '本工具只针对 Fit900NB Turbo 调校，同时保留其他漫步者型号的兼容档案。',
-      'en': 'Tuned for the Fit900NB Turbo, while keeping compatibility profiles for other EDIFIER models.',
+      'zh': '本工具只服务 Fit900NB Turbo：没有型号识别，也不会切换成别的协议。',
+      'en': 'Built for the Fit900NB Turbo only: no model detection, no protocol switching.',
     },
-    'settings.unverified': {'zh': '协议未在真机验证', 'en': 'Protocol not verified on hardware'},
 
     'common.cancel': {'zh': '取消', 'en': 'Cancel'},
     'common.ok': {'zh': '确定', 'en': 'OK'},

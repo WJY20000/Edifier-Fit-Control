@@ -9,7 +9,7 @@
 //        len = 1 + data.length，crc = (0x2019 + 前面所有字节之和) & 0xFFFF
 //
 //   v2   AA | EC | cmd | lenHi | lenLo | payload... | sum8      （BES 新固件）
-//        sum8 = 前面所有字节之和 & 0xFF；多数型号 payload 再整体异或 0xA5
+//        sum8 = 前面所有字节之和 & 0xFF；Fit900NB Turbo 为明文，个别固件会异或 0xA5
 //
 // 设备回包把首字节换成 BB 或 CC，其余结构一致。
 
@@ -23,7 +23,7 @@ class EdifierFrame {
   /// 命令字。
   final int command;
 
-  /// 数据段（v2 的异或尚未还原，由上层按协商结果处理）。
+  /// 数据段（原样返回；本应用只收明文 v2，不做异或还原）。
   final Uint8List payload;
 
   /// 是否 v2（BES）帧。
@@ -47,7 +47,7 @@ class EdifierFrame {
       'v2=$v2, payload=[$payloadHex])';
 }
 
-/// 请求帧的三种方言。
+/// 帧格式。本应用只发 [Framing.v2]（明文），其余取值只用于解码与单元测试。
 enum Framing {
   /// 旧协议：AA len cmd data crc16（明文）。
   v1,
@@ -137,7 +137,7 @@ class EdifierCodec {
     return frame;
   }
 
-  /// 按方言编码。
+  /// 按帧格式编码。
   static Uint8List encode(
     Framing framing,
     int command,

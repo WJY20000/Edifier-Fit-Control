@@ -597,7 +597,7 @@ class UniversalBleLink implements EdifierLink {
   final EdifierGatt gatt;
   final Stream<List<int>> notifications;
 
-  /// 协商后的 MTU（含 3 字节头）。
+  /// 协商后的 MTU（含 3 字节头）——BLE 链路层的 MTU，与型号无关。
   int mtu;
 
   @override
