@@ -115,6 +115,34 @@ void main() {
       expect(frames.first.payload.length, 18);
     });
 
+    test('静默超过 5 秒：上一次的半帧作废，不拖累新帧', () {
+      var now = DateTime(2026, 1, 1, 12);
+      final decoder = FrameDecoder(clock: () => now);
+      final bytes = responseV2(Op.nameGet, List<int>.filled(18, 0x41));
+      // 先只喂前 7 个字节，留下一个「长度够了但内容还没到」的半帧。
+      expect(decoder.feed(bytes.sublist(0, 7)), isEmpty);
+      expect(decoder.droppedBytes, 0);
+
+      now = now.add(const Duration(seconds: 6));
+      final frames = decoder.feed(responseV2(Op.batteryGet, const [55]));
+      expect(frames.length, 1);
+      expect(frames.first.payload, [55]);
+      // 半帧的 7 个字节被记账丢弃，而不是留在缓冲区里搅乱下一帧。
+      expect(decoder.droppedBytes, 7);
+    });
+
+    test('静默不超过 5 秒：残帧继续拼，不误丢', () {
+      var now = DateTime(2026, 1, 1, 12);
+      final decoder = FrameDecoder(clock: () => now);
+      final bytes = responseV2(Op.nameGet, List<int>.filled(18, 0x41));
+      expect(decoder.feed(bytes.sublist(0, 7)), isEmpty);
+      now = now.add(const Duration(seconds: 4));
+      final frames = decoder.feed(bytes.sublist(7));
+      expect(frames.length, 1);
+      expect(frames.first.payload.length, 18);
+      expect(decoder.droppedBytes, 0);
+    });
+
     test('也接受回显 AA 头的固件', () {
       final bytes = responseV2(Op.batteryGet, const [33]);
       bytes[0] = 0xAA;

@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'glass.dart';
 import 'theme.dart';
 
 /// 卡片语气：普通白/深灰卡、轻填充卡。
@@ -80,16 +81,23 @@ class SectionCard extends StatelessWidget {
     );
 
     if (tone == CardTone.soft) {
-      return Container(
-        decoration: BoxDecoration(
-          color: FitTheme.faint(context),
-          borderRadius: BorderRadius.circular(FitRadius.card),
-          border: Border.all(color: FitTheme.hairline(context)),
+      // 轻填充卡：仍然是一块玻璃，但更薄、不投影，
+      // 嵌在另一张玻璃卡里时不会出现两层阴影叠在一起。
+      return GlassSurface(
+        tintAlpha: FitTheme.isDark(context) ? 0.22 : 0.30,
+        blur: 8,
+        shadow: false,
+        rim: false,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(FitRadius.card),
+            border: Border.all(color: FitTheme.hairline(context)),
+          ),
+          child: body,
         ),
-        child: body,
       );
     }
-    return Card(child: body);
+    return GlassSurface(child: body);
   }
 }
 
@@ -295,13 +303,23 @@ class OptionTile extends StatelessWidget {
               ),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(FitRadius.tile),
-                color: active
-                    ? FitColors.accent.withValues(alpha: dark ? 0.18 : 0.09)
-                    : FitTheme.faint(context),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: active
+                      ? [
+                          FitColors.accent.withValues(alpha: dark ? 0.26 : 0.14),
+                          FitColors.accent.withValues(alpha: dark ? 0.12 : 0.06),
+                        ]
+                      : [
+                          FitTheme.faint(context),
+                          FitTheme.faint(context).withValues(alpha: 0.5),
+                        ],
+                ),
                 border: Border.all(
                   width: 1,
                   color: active
-                      ? FitColors.accent.withValues(alpha: dark ? 0.6 : 0.45)
+                      ? FitColors.accent.withValues(alpha: dark ? 0.55 : 0.42)
                       : Colors.transparent,
                 ),
               ),
@@ -456,7 +474,7 @@ class _CollapsibleSectionState extends State<CollapsibleSection> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final muted = theme.colorScheme.onSurface.withValues(alpha: 0.56);
-    return Card(
+    return GlassSurface(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

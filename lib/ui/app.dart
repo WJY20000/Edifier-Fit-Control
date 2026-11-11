@@ -7,6 +7,7 @@ import '../i18n/l10n.dart';
 import '../platform/quit.dart';
 import '../state/session.dart';
 import 'device_page.dart';
+import 'glass.dart';
 import 'lab_page.dart';
 import 'scan_page.dart';
 import 'settings_page.dart';
@@ -77,6 +78,8 @@ class _FitAppState extends State<FitApp> {
           theme: FitTheme.build(Brightness.light),
           darkTheme: FitTheme.build(Brightness.dark),
           themeMode: themeMode,
+          // 滚到边界用「拉伸」而不是发光（Android），和 FlClash 一致。
+          scrollBehavior: const FitScrollBehavior(),
           locale: Locale(_session.locale),
           supportedLocales: const [Locale('zh'), Locale('en')],
           localizationsDelegates: const [
@@ -239,7 +242,7 @@ class _HomeShellState extends State<HomeShell> {
     final l10n = session.l10n;
     final pages = [
       DevicePage(session: session, onGoScan: _goScan),
-      ScanPage(session: session, onConnected: () => setState(() => _index = 0)),
+      ScanPage(session: session, onConnected: () => _select(0)),
       LabPage(session: session),
       SettingsPage(session: session),
     ];
@@ -250,13 +253,31 @@ class _HomeShellState extends State<HomeShell> {
       l10n.t('tab.settings'),
     ];
     final destinations = [
-      _Destination(Icons.headphones_rounded, Icons.headphones_outlined, l10n.t('tab.device')),
-      _Destination(Icons.bluetooth_searching_rounded, Icons.bluetooth_rounded, l10n.t('tab.scan')),
-      _Destination(Icons.terminal_rounded, Icons.terminal_outlined, l10n.t('tab.lab')),
-      _Destination(Icons.settings_rounded, Icons.settings_outlined, l10n.t('tab.settings')),
+      GlassDestination(
+        icon: Icons.headphones_outlined,
+        selectedIcon: Icons.headphones_rounded,
+        label: l10n.t('tab.device'),
+      ),
+      GlassDestination(
+        icon: Icons.bluetooth_rounded,
+        selectedIcon: Icons.bluetooth_searching_rounded,
+        label: l10n.t('tab.scan'),
+      ),
+      GlassDestination(
+        icon: Icons.terminal_outlined,
+        selectedIcon: Icons.terminal_rounded,
+        label: l10n.t('tab.lab'),
+      ),
+      GlassDestination(
+        icon: Icons.settings_outlined,
+        selectedIcon: Icons.settings_rounded,
+        label: l10n.t('tab.settings'),
+      ),
     ];
 
-    final body = IndexedStack(index: _index, children: pages);
+    // 四个页面一直挂在树上（滚动位置、输入内容不丢），
+    // 切换时按方向滑入 / 滑出。
+    final body = LiquidPageView(index: _index, children: pages);
     final maxWidth = _index == 0 ? 1180.0 : 900.0;
 
     return PopScope(
@@ -266,157 +287,121 @@ class _HomeShellState extends State<HomeShell> {
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (_index != 0) {
-          setState(() => _index = 0);
+          _select(0);
           return;
         }
         quitApp(session);
       },
-      child: _buildShell(context, l10n, titles, destinations, body, maxWidth),
-    );
-  }
-
-  Widget _buildShell(
-    BuildContext context,
-    L10n l10n,
-    List<String> titles,
-    List<_Destination> destinations,
-    Widget body,
-    double maxWidth,
-  ) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 840;
-        if (wide) {
-          return Scaffold(
-            body: Row(
-              children: [
-                SafeArea(
-                  child: NavigationRail(
-                    selectedIndex: _index,
-                    onDestinationSelected: (value) => setState(() => _index = value),
-                    labelType: NavigationRailLabelType.all,
-                    leading: const Padding(
-                      padding: EdgeInsets.only(top: 16, bottom: 22),
-                      child: _Brand(width: 46),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 840;
+          return GlassBackdrop(
+            child: Scaffold(
+              // 背景由 GlassBackdrop 负责画。Scaffold 必须透明，
+              // 否则磨砂层背后是一块纯色，模糊和色光都看不见。
+              backgroundColor: Colors.transparent,
+              appBar: wide ? null : _buildPhoneBar(l10n, titles[_index]),
+              body: wide
+                  ? _buildWideBody(titles[_index], body, maxWidth, destinations)
+                  // 顶栏 / 底部胶囊各自处理了系统栏，这里只留左右。
+                  : SafeArea(top: false, bottom: false, child: body),
+              bottomNavigationBar: wide
+                  ? null
+                  : GlassDock(
+                      index: _index,
+                      onSelected: _select,
+                      destinations: destinations,
                     ),
-                    destinations: [
-                      for (final d in destinations)
-                        NavigationRailDestination(
-                          icon: Icon(d.icon),
-                          selectedIcon: Icon(d.selectedIcon),
-                          label: Text(d.label),
-                        ),
-                    ],
-                  ),
-                ),
-                VerticalDivider(
-                  width: 1,
-                  color: FitTheme.hairline(context),
-                ),
-                Expanded(
-                  child: _Backdrop(
-                    child: SafeArea(
-                      child: Column(
-                        children: [
-                          _Header(
-                            title: titles[_index],
-                            session: session,
-                            showRefresh: _index == 0,
-                          ),
-                          Expanded(
-                            child: Align(
-                              alignment: Alignment.topCenter,
-                              child: ConstrainedBox(
-                                constraints: BoxConstraints(maxWidth: maxWidth),
-                                child: body,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
             ),
           );
-        }
-        return Scaffold(
-          appBar: AppBar(
-            titleSpacing: 16,
-            title: Row(
+        },
+      ),
+    );
+  }
+
+  void _select(int value) {
+    if (value == _index) return;
+    setState(() => _index = value);
+  }
+
+  PreferredSizeWidget _buildPhoneBar(L10n l10n, String title) {
+    return AppBar(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      titleSpacing: 16,
+      // 磨砂底：和卡片同一套玻璃语言，状态栏那一条也一起磨。
+      flexibleSpace: const GlassBarVeil(),
+      title: Row(
+        children: [
+          const _Brand(width: 30),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              title,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        if (_index != 0) _StatusAction(session: session),
+        if (_index == 0)
+          IconButton(
+            tooltip: l10n.t('device.refreshHint'),
+            onPressed: session.refreshBattery,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        const SizedBox(width: 6),
+      ],
+    );
+  }
+
+  Widget _buildWideBody(
+    String title,
+    Widget body,
+    double maxWidth,
+    List<GlassDestination> destinations,
+  ) {
+    return SafeArea(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 0, 12),
+            child: GlassSidebar(
+              index: _index,
+              onSelected: _select,
+              destinations: destinations,
+              leading: const _Brand(width: 44),
+            ),
+          ),
+          Expanded(
+            child: Column(
               children: [
-                const _Brand(width: 30),
-                const SizedBox(width: 10),
-                Flexible(
-                  child: Text(
-                    titles[_index],
-                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-                    overflow: TextOverflow.ellipsis,
+                _Header(
+                  title: title,
+                  session: session,
+                  showRefresh: _index == 0,
+                ),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: maxWidth),
+                      child: body,
+                    ),
                   ),
                 ),
               ],
             ),
-            actions: [
-              if (_index != 0) _StatusAction(session: session),
-              if (_index == 0)
-                IconButton(
-                  tooltip: l10n.t('device.refreshHint'),
-                  onPressed: session.refreshBattery,
-                  icon: const Icon(Icons.refresh_rounded),
-                ),
-              const SizedBox(width: 6),
-            ],
           ),
-          body: _Backdrop(child: SafeArea(child: body)),
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: _index,
-            onDestinationSelected: (value) => setState(() => _index = value),
-            destinations: [
-              for (final d in destinations)
-                NavigationDestination(
-                  icon: Icon(d.icon),
-                  selectedIcon: Icon(d.selectedIcon),
-                  label: d.label,
-                ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-/// 极淡的纵向渐变，避免整屏死板的纯色。
-class _Backdrop extends StatelessWidget {
-  const _Backdrop({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final dark = FitTheme.isDark(context);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: dark
-              ? [const Color(0xFF12151C), FitColors.bgDark]
-              : [const Color(0xFFF8F9FC), FitColors.bgLight],
-        ),
+        ],
       ),
-      child: child,
     );
   }
-}
-
-class _Destination {
-  const _Destination(this.icon, this.selectedIcon, this.label);
-
-  final IconData icon;
-  final IconData selectedIcon;
-  final String label;
 }
 
 class _Brand extends StatelessWidget {
@@ -499,20 +484,28 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final dark = FitTheme.isDark(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 18, 16, 4),
-      child: Row(
-        children: [
-          Text(title, style: theme.textTheme.headlineSmall),
-          const Spacer(),
-          _StatusAction(session: session),
-          if (showRefresh)
-            IconButton(
-              tooltip: session.l10n.t('device.refreshHint'),
-              onPressed: session.connected ? session.refreshBattery : null,
-              icon: const Icon(Icons.refresh_rounded, size: 20),
-            ),
-        ],
+      padding: const EdgeInsets.fromLTRB(6, 12, 18, 4),
+      child: GlassSurface(
+        radius: 20,
+        blur: GlassBlur.bar,
+        tint: dark ? const Color(0xFF141A22) : Colors.white,
+        tintAlpha: dark ? 0.62 : 0.70,
+        padding: const EdgeInsets.fromLTRB(18, 6, 6, 6),
+        child: Row(
+          children: [
+            Text(title, style: theme.textTheme.headlineSmall),
+            const Spacer(),
+            _StatusAction(session: session),
+            if (showRefresh)
+              IconButton(
+                tooltip: session.l10n.t('device.refreshHint'),
+                onPressed: session.connected ? session.refreshBattery : null,
+                icon: const Icon(Icons.refresh_rounded, size: 20),
+              ),
+          ],
+        ),
       ),
     );
   }

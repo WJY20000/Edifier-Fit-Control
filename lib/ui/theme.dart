@@ -147,27 +147,6 @@ class FitTheme {
         elevation: 0,
         centerTitle: false,
       ),
-      navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: dark ? FitColors.surfaceDark : FitColors.surfaceLight,
-        surfaceTintColor: Colors.transparent,
-        indicatorColor: FitColors.accent.withValues(alpha: 0.14),
-        height: 64,
-        labelTextStyle: WidgetStatePropertyAll(
-          base.textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600),
-        ),
-      ),
-      navigationRailTheme: NavigationRailThemeData(
-        backgroundColor: Colors.transparent,
-        indicatorColor: FitColors.accent.withValues(alpha: 0.14),
-        selectedIconTheme: IconThemeData(
-          color: dark ? FitColors.accentLight : FitColors.accent,
-        ),
-        selectedLabelTextStyle: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          color: dark ? Colors.white : Colors.black,
-        ),
-      ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           shape: RoundedRectangleBorder(

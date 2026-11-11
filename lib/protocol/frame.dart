@@ -168,15 +168,41 @@ class EdifierCodec {
 /// 设备可能在任意字节边界分包（BLE 默认 MTU 23 → 每次 20 字节），
 /// 因此必须缓存残帧；同时兼容 v1 与 v2 两种布局。
 class FrameDecoder {
+  FrameDecoder({DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
+
   final List<int> _buffer = <int>[];
+
+  /// 可注入的时钟：单元测试里不用真等 5 秒。
+  final DateTime Function() _clock;
+
+  /// 上一次收到通知的时间。
+  DateTime? _lastFeed;
 
   /// 供 UI / 日志观察的丢弃计数（校验失败、找不到帧头等）。
   int droppedBytes = 0;
 
   static const int _maxBuffered = 8192;
 
+  /// 链路静默超过这个时长，就认为上一次残留的半帧已经作废。
+  ///
+  /// 只靠「长度不够就等」的话，一个尾巴（比如长度字段正好读到一半、
+  /// 或者头两字节是噪声）会一直躺在缓冲区里：下一批数据接上去以后
+  /// 校验必然失败，于是从帧头开始逐字节丢弃 —— 表现是「偶发丢一帧、
+  /// 甚至连续几帧都读不出来」，而日志里看不出原因。
+  /// edifier-macos 在同样的位置也用了 5 秒静默重置。
+  static const Duration staleAfter = Duration(seconds: 5);
+
   /// 喂入一段通知数据，返回解析出的完整帧。
   List<EdifierFrame> feed(List<int> data) {
+    final now = _clock();
+    final last = _lastFeed;
+    if (last != null &&
+        _buffer.isNotEmpty &&
+        now.difference(last) > staleAfter) {
+      droppedBytes += _buffer.length;
+      _buffer.clear();
+    }
+    _lastFeed = now;
     _buffer.addAll(data);
     final frames = <EdifierFrame>[];
 
@@ -265,6 +291,7 @@ class FrameDecoder {
 
   void reset() {
     _buffer.clear();
+    _lastFeed = null;
     droppedBytes = 0;
   }
 }

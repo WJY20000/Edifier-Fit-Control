@@ -6,6 +6,7 @@ import '../protocol/frame.dart';
 import '../protocol/models.dart';
 import '../protocol/opcodes.dart';
 import '../state/session.dart';
+import 'glass.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -296,74 +297,86 @@ class _Hero extends StatelessWidget {
     final state = session.engine?.state;
     final name = state?.name ?? session.deviceName ?? kMyHeadsetName;
 
-    return Container(
-      padding: const EdgeInsets.fromLTRB(22, 22, 20, 22),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(FitRadius.hero),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: dark
-              ? [const Color(0xFF18232C), const Color(0xFF0F161C)]
-              : [Colors.white, const Color(0xFFEFF1F6)],
-        ),
-        border: Border.all(color: FitTheme.hairline(context)),
+    return GlassSurface(
+      radius: FitRadius.hero,
+      blur: GlassBlur.hero,
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: dark
+            ? [
+                const Color(0xFF1B2C3A).withValues(alpha: 0.72),
+                const Color(0xFF0F161C).withValues(alpha: 0.60),
+              ]
+            : [
+                Colors.white.withValues(alpha: 0.82),
+                const Color(0xFFEDF2F8).withValues(alpha: 0.68),
+              ],
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(FitRadius.hero),
-        child: Stack(
-          children: [
-            // 右上角一团极淡的品牌蓝，避免大面积纯灰。
-            Positioned(
-              right: -50,
-              top: -70,
-              child: IgnorePointer(
-                child: Container(
-                  width: 220,
-                  height: 220,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [
-                        FitColors.accent.withValues(alpha: dark ? 0.16 : 0.08),
-                        FitColors.accent.withValues(alpha: 0),
-                      ],
-                    ),
+      padding: const EdgeInsets.fromLTRB(20, 20, 18, 20),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // 右上角一团极淡的品牌蓝：玻璃把它「折」进来，边缘会随之变化。
+          Positioned(
+            right: -40,
+            top: -60,
+            child: IgnorePointer(
+              child: Container(
+                width: 230,
+                height: 230,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      FitColors.accent.withValues(alpha: dark ? 0.22 : 0.12),
+                      FitColors.accent.withValues(alpha: 0),
+                    ],
                   ),
                 ),
               ),
             ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontSize: 24,
-                          height: 1.15,
+          ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              // 窄屏（Android 常见 360dp）把字号和圆环一起收一档，
+              // 让「EDIFIER Fit900NB Turbo」最多两行就能放下。
+              final compact = constraints.maxWidth < 280;
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          style: theme.textTheme.headlineMedium?.copyWith(
+                            fontSize: compact ? 19 : 22,
+                            height: 1.18,
+                            // 负字距会让字形的左边缘探出排版盒，
+                            // 在窄屏 + 圆角裁剪下看起来像「首字母被切掉」。
+                            letterSpacing: 0,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                         ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 14),
-                      const CertBadges(),
-                    ],
+                        const SizedBox(height: 14),
+                        const CertBadges(),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(width: 14),
-                BatteryRing(
-                  percent: state?.battery,
-                  label: l10n.t('device.battery'),
-                  size: 108,
-                ),
-              ],
-            ),
-          ],
-        ),
+                  const SizedBox(width: 12),
+                  BatteryRing(
+                    percent: state?.battery,
+                    label: l10n.t('device.battery'),
+                    size: compact ? 88 : 100,
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
       ),
     );
   }

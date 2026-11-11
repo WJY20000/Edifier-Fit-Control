@@ -448,8 +448,38 @@ class Session extends ChangeNotifier {
     return previous.then((_) => task()).whenComplete(() => done.complete());
   }
 
-  /// 上一次「失败后自动重新读取」的时间，避免每次点击都触发一轮。
-  DateTime? _lastHeal;
+  /// 自动重读的退避表。
+  ///
+  /// 以前是一刀切的 12 秒冷却：链路只是偶尔抖一下，用户点第二次却要干等
+  /// 12 秒才有反应；而连续抖动时又每 12 秒重谈一次，频率固定，没法自适应。
+  /// 现在第一次几乎立刻重试（2 秒），连续失败才逐步拉开到 15 秒，
+  /// 成功一次就清零 —— 和 edifier-macos 的 [2,4,6,10,15] 退避是同一思路。
+  static const List<Duration> _healBackoff = [
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+    Duration(seconds: 6),
+    Duration(seconds: 10),
+    Duration(seconds: 15),
+  ];
+
+  /// 连续失败次数（成功一次就清零）。
+  int _healFailures = 0;
+
+  /// 下一次允许自动重读的时间；为空表示不限制。
+  DateTime? _nextHealAt;
+
+  /// 记一次失败。用「此刻」而不是发起重读的时刻：
+  /// `negotiate()` 本身可能要跑好几秒，从发起时刻算退避等于把冷却吃掉。
+  void _noteHealFailed() {
+    final next = _healFailures + 1;
+    _healFailures = next > _healBackoff.length ? _healBackoff.length : next;
+    _nextHealAt = DateTime.now().add(_healBackoff[_healFailures - 1]);
+  }
+
+  void _noteHealOk() {
+    _healFailures = 0;
+    _nextHealAt = null;
+  }
 
   /// 先按已知状态执行；失败就自动重新读一遍再试一次。
   ///
@@ -461,7 +491,11 @@ class Session extends ChangeNotifier {
     if (edifier == null) return false;
     // 链路抖一下时写 GATT 可能直接抛异常，别让它变成未捕获错误。
     try {
-      if (await action(edifier)) return true;
+      if (await action(edifier)) {
+        // 链路自己恢复了：把退避清零，下次抖动仍然可以立刻重试。
+        _noteHealOk();
+        return true;
+      }
     } catch (_) {
       // 当作失败，下面走自动重谈。
     }
@@ -469,19 +503,26 @@ class Session extends ChangeNotifier {
     if (!connected) return false;
 
     final now = DateTime.now();
-    final cooling = _lastHeal != null &&
-        now.difference(_lastHeal!) < const Duration(seconds: 12);
-    if (cooling) return false;
-    _lastHeal = now;
+    final next = _nextHealAt;
+    if (next != null && now.isBefore(next)) return false;
     try {
       _negotiation = await edifier.negotiate();
     } catch (_) {
+      _noteHealFailed();
       return false;
     }
     notifyListeners();
     try {
-      return await action(edifier);
+      final ok = await action(edifier);
+      // 重读之后这条命令成功了：说明刚才只是链路抖了一下，退避归零。
+      if (ok) {
+        _noteHealOk();
+      } else {
+        _noteHealFailed();
+      }
+      return ok;
     } catch (_) {
+      _noteHealFailed();
       return false;
     }
   }

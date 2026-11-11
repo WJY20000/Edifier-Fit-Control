@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../ble/ble_controller.dart';
+import '../config.dart';
 import '../state/session.dart';
+import 'glass.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -399,11 +401,16 @@ class _DeviceTile extends StatelessWidget {
     final isCurrent =
         session.connected && BleController.sameAddress(session.deviceId, device.id);
     final pinned = BleController.sameAddress(session.targetMac, device.id);
-    final name = device.name?.isNotEmpty == true
-        ? device.name!
-        : l10n.t('scan.unknownDevice');
+    // 广播名只有「EDIFIER BLE」这种短名（AD 0x08/0x09），
+    // 真正好认的是经典侧的名字。既然只支持这一只耳机，认出来就直接显示它，
+    // 不要让用户对着「EDIFIER BLE」猜哪个才是自己的。
+    final name = device.mine && kMyHeadsetName.isNotEmpty
+        ? kMyHeadsetName
+        : device.name?.isNotEmpty == true
+            ? device.name!
+            : l10n.t('scan.unknownDevice');
 
-    return Card(
+    return GlassSurface(
       child: InkWell(
         borderRadius: BorderRadius.circular(FitRadius.card),
         onTap: connecting || isCurrent ? null : onTap,

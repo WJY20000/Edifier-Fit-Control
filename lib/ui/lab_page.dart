@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../protocol/engine.dart';
 import '../protocol/opcodes.dart';
 import '../state/session.dart';
+import 'glass.dart';
 import 'widgets.dart';
 
 /// 实验室：手动发命令、看原始收发。
@@ -190,71 +191,73 @@ class _LabPageState extends State<LabPage> {
         ),
         const SizedBox(height: 6),
         Expanded(
-          child: Card(
-            margin: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
-                  child: Row(
-                    children: [
-                      Text(
-                        l10n.t('lab.log'),
-                        style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        l10n.t('lab.logSize', {'n': logs.length}),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+            child: GlassSurface(
+              radius: 16,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
+                    child: Row(
+                      children: [
+                        Text(
+                          l10n.t('lab.log'),
+                          style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
                         ),
-                      ),
-                      const Spacer(),
-                      TextButton.icon(
-                        onPressed: logs.isEmpty
-                            ? null
-                            : () async {
-                                await Clipboard.setData(
-                                  ClipboardData(
-                                    text: logs
-                                        .map((e) => '${e.stamp}  ${e.direction.name.toUpperCase().padRight(5)}  ${e.text}')
-                                        .join('\n'),
-                                  ),
-                                );
-                                if (!context.mounted) return;
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(content: Text(l10n.t('lab.copied'))),
-                                );
-                              },
-                        icon: const Icon(Icons.copy_all_rounded, size: 16),
-                        label: Text(l10n.t('lab.copy')),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: logs.isEmpty
-                      ? Center(
-                          child: Text(
-                            l10n.t('lab.emptyLog'),
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
+                        const SizedBox(width: 8),
+                        Text(
+                          l10n.t('lab.logSize', {'n': logs.length}),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
                           ),
-                        )
-                      : ListView.builder(
-                          reverse: true,
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          itemCount: logs.length,
-                          itemBuilder: (context, index) {
-                            final entry = logs[logs.length - 1 - index];
-                            return _LogRow(entry: entry);
-                          },
                         ),
-                ),
-              ],
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: logs.isEmpty
+                              ? null
+                              : () async {
+                                  await Clipboard.setData(
+                                    ClipboardData(
+                                      text: logs
+                                          .map((e) => '${e.stamp}  ${e.direction.name.toUpperCase().padRight(5)}  ${e.text}')
+                                          .join('\n'),
+                                    ),
+                                  );
+                                  if (!context.mounted) return;
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(l10n.t('lab.copied'))),
+                                  );
+                                },
+                          icon: const Icon(Icons.copy_all_rounded, size: 16),
+                          label: Text(l10n.t('lab.copy')),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  Expanded(
+                    child: logs.isEmpty
+                        ? Center(
+                            child: Text(
+                              l10n.t('lab.emptyLog'),
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            reverse: true,
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            itemCount: logs.length,
+                            itemBuilder: (context, index) {
+                              final entry = logs[logs.length - 1 - index];
+                              return _LogRow(entry: entry);
+                            },
+                          ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
