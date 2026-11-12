@@ -1,5 +1,51 @@
 # 更新记录
 
+## 0.8.20 — 2026-10-19
+
+### 修 CI：一个真正的编译错误（0.8.18 / 0.8.19 都挂在这）
+
+GitHub Actions 从 0.8.18 起全红，注解里写得很清楚：
+
+```
+lib/ui/glass_render.dart:268:18: Error:
+The method 'localToGlobal' isn't defined for the type 'RenderObject'.
+```
+
+`findRenderObject()` 的返回类型是 `RenderObject`，而 `localToGlobal` 定义在
+**`RenderBox`** 上。0.8.18 写的是：
+
+```dart
+final object = target.currentContext?.findRenderObject();
+final origin = object == null ? Offset.zero : object.localToGlobal(...);  // ← 编译不过
+```
+
+必须先收窄：
+
+```dart
+final object = target.currentContext?.findRenderObject();
+final origin = object is RenderBox
+    ? object.localToGlobal(Offset.zero) - texture.bounds.topLeft
+    : Offset.zero;
+```
+
+同文件里另外两处（采集边界、透镜抓图）本来就写了
+`if (object is! RenderRepaintBoundary) return;`，所以只有这一处会挂。
+这就是「静态解析 0 错误」和「能编译」的差别：tree-sitter 只查语法，不查类型。
+
+### 顺带：测试环境不截图
+
+`flutter test` 里 `toImageSync` 要么抛异常，要么分配一张全屏纹理；纹理一发布，
+监听它的画笔就请求下一帧，`pumpAndSettle()` 会一直等下去。
+现在检测到 `FLUTTER_TEST=true` 就完全不排采集，玻璃走纯色兜底。
+（真机上不受影响。）
+
+### 自查新增一条硬规则（O 项）
+
+`verify.py` 现在会逐处检查 `findRenderObject()` 之后的 8 行内有没有
+`is RenderBox` / `is! RenderBox` / `is RenderRepaintBoundary` 收窄；
+没有就先报错。反向验证：把收窄删掉，脚本立刻报
+`O glass_render.dart:212: findRenderObject() 之后没有收窄成 RenderBox`。
+
 ## 0.8.19 — 2026-10-19
 
 ### 复查 0.8.18：一个真缺陷（会一直烧电）+ 三处隐患

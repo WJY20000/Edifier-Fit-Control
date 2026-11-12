@@ -1,3 +1,4 @@
+import 'dart:io' show Platform;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -141,6 +142,21 @@ class GlassCapture extends StatefulWidget {
 }
 
 class _GlassCaptureState extends State<GlassCapture> {
+  /// `flutter test` 会在子进程环境里写 `FLUTTER_TEST=true`。
+  ///
+  /// 测试里不截图：`toImageSync` 在测试光栅器上要么抛异常、要么分配一张
+  /// 全屏纹理；而纹理一发布，监听它的画笔就会请求下一帧，
+  /// `pumpAndSettle()` 会一直等下去。玻璃在测试里走纯色兜底即可。
+  static final bool _inTest = _detectTest();
+
+  static bool _detectTest() {
+    try {
+      return Platform.environment['FLUTTER_TEST'] == 'true';
+    } catch (_) {
+      return false;
+    }
+  }
+
   final GlobalKey _key = GlobalKey();
   GlassTexture? _current;
   int _generation = 0;
@@ -157,7 +173,7 @@ class _GlassCaptureState extends State<GlassCapture> {
   @override
   void initState() {
     super.initState();
-    _schedule();
+    if (!_inTest) _schedule();
   }
 
   @override
@@ -183,7 +199,7 @@ class _GlassCaptureState extends State<GlassCapture> {
   }
 
   void _tick() {
-    if (!mounted) return;
+    if (!mounted || _inTest) return;
     // 只把「下一个 post-frame」重新排上，本身**不会**产生帧：
     // 没有帧的时候它就静静等着，有帧的时候才轮到它判断要不要截。
     _schedule();
@@ -320,10 +336,12 @@ class GlassPanePainter extends CustomPainter {
       return;
     }
 
+    // findRenderObject() 返回的是 RenderObject，而 localToGlobal 在 RenderBox 上
+    // —— 必须先收窄，否则编译不过（CI 就是这么挂的）。
     final object = target.currentContext?.findRenderObject();
-    final origin = object == null
-        ? Offset.zero
-        : object.localToGlobal(Offset.zero) - texture.bounds.topLeft;
+    final origin = object is RenderBox
+        ? object.localToGlobal(Offset.zero) - texture.bounds.topLeft
+        : Offset.zero;
 
     var index = 0;
     void put(double v) => shader.setFloat(index++, v);
