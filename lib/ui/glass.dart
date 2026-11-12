@@ -7,6 +7,7 @@ import 'package:flutter/physics.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 
+import 'dock_lens.dart';
 import 'glass_optics.dart';
 import 'theme.dart';
 
@@ -101,6 +102,15 @@ class _GlassSurfaceState extends State<GlassSurface> {
   /// 所以由 [_GlassMetrics] 在布局后回填一次。
   Size? _size;
 
+  /// 这块玻璃左上角在屏幕上的位置（dp）。着色器的像素坐标是整层的，
+  /// 必须把它减掉，否则圆角与法线会画在屏幕左上角 —— 0.8.14 之前
+  /// 卡片顶边那条灰带 + 彩边就是这么来的。
+  Offset _origin = Offset.zero;
+
+  /// 原点还没量出来之前不要折射：宁可先按磨砂画一帧，
+  /// 也不要拿 (0,0) 去算，免得第一帧闪一下错位的边。
+  bool _originReady = false;
+
   /// 上一次算好的滤镜。卡片在 session 每次通知（电量、降噪切换……）时都会
   /// 重建，如果每次都 `setFloat` × 18 再 new 一个 `ImageFilter`，一屏十块玻璃
   /// 就是每秒几百次分配。参数没变就直接复用。
@@ -155,7 +165,9 @@ class _GlassSurfaceState extends State<GlassSurface> {
     final dark = FitTheme.isDark(context);
     final shape = BorderRadius.circular(widget.radius);
     final base = widget.tint ?? (dark ? const Color(0xFF1B232D) : Colors.white);
-    final alpha = widget.tintAlpha ?? (dark ? 0.56 : 0.66);
+    // 比 0.8.13 更透：FlClash 那种「玻璃」是能看见背后东西的，
+    // 0.66 的白色实际上等于一块实心卡。模糊给足，字照样清楚。
+    final alpha = widget.tintAlpha ?? (dark ? 0.52 : 0.54);
     final fill = widget.gradient ??
         LinearGradient(
           begin: Alignment.topLeft,
@@ -185,6 +197,8 @@ class _GlassSurfaceState extends State<GlassSurface> {
       final cacheKey = Object.hash(
         size,
         dpr,
+        _origin,
+        _originReady,
         widget.radius,
         widget.blur,
         depth,
@@ -206,9 +220,10 @@ class _GlassSurfaceState extends State<GlassSurface> {
           child: BackdropFilter(filter: cached, child: content),
         );
       }
-      final optical = (lens != null && depth != 0 && size != null)
+      final optical = (lens != null && depth != 0 && size != null && _originReady)
           ? lens.filter(
               size: size,
+              origin: _origin,
               devicePixelRatio: dpr,
               radius: widget.radius,
               blurSigma: widget.blur * 0.55,
@@ -216,7 +231,9 @@ class _GlassSurfaceState extends State<GlassSurface> {
               refraction: depth ??
                   (widget.blur * 0.55).clamp(4.0, 12.0).toDouble(),
               // 小面板（胶囊、按钮）色散收一点，否则边缘会发紫。
-              dispersion: math.min(size.shortestSide * 0.035, 1.8),
+              // 0.8.14 之前这里是 0.035 / 1.8，在接近白的浅色背景上
+              // 会在顶边拉出一条黄粉色的彩边，非常显脏。
+              dispersion: math.min(size.shortestSide * 0.012, 0.8),
               rim: dark ? 0.26 : 0.34,
               line: dark ? 0.10 : 0.06,
               saturation: dark ? 1.18 : 1.24,
@@ -246,11 +263,19 @@ class _GlassSurfaceState extends State<GlassSurface> {
     // 既没有模糊也没有折射（比如扫描页的列表项）时不需要尺寸，
     // 也就不必为了量一次尺寸白白 setState 一轮。
     if (_lens != null && _needsOptics) {
-      // 着色器需要知道玻璃的尺寸；布局完成后回填，在此之前先按磨砂画。
+      // 着色器需要知道玻璃的尺寸和它在层里的位置；布局 / 绘制后回填，
+      // 在那之前先按磨砂画。
       surface = _GlassMetrics(
         onSize: (size) {
           if (!mounted || size == _size) return;
           setState(() => _size = size);
+        },
+        onOrigin: (origin) {
+          if (!mounted || (_originReady && origin == _origin)) return;
+          setState(() {
+            _origin = origin;
+            _originReady = true;
+          });
         },
         child: surface,
       );
@@ -280,11 +305,13 @@ class _GlassSurfaceState extends State<GlassSurface> {
         decoration: BoxDecoration(
           borderRadius: shape,
           boxShadow: [
+            // 散得开一点、淡一点：0.8.14 的 22/‑10 在浅色主题下会在
+            // 卡片上沿压出一条能看清边界的灰带（用户截图里那条）。
             BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? 0.26 : 0.09),
-              blurRadius: 22,
-              spreadRadius: -10,
-              offset: const Offset(0, 10),
+              color: Colors.black.withValues(alpha: dark ? 0.30 : 0.07),
+              blurRadius: 34,
+              spreadRadius: -12,
+              offset: const Offset(0, 14),
             ),
           ],
         ),
@@ -300,13 +327,18 @@ class _GlassSurfaceState extends State<GlassSurface> {
 /// 不用 [LayoutBuilder]：它拿到的约束在 `ListView` 里高度是无限的，
 /// 而着色器必须知道真实的 dp 尺寸才能算出圆角和法线。
 class _GlassMetrics extends SingleChildRenderObjectWidget {
-  const _GlassMetrics({required this.onSize, required Widget super.child});
+  const _GlassMetrics({
+    required this.onSize,
+    required this.onOrigin,
+    required Widget super.child,
+  });
 
   final ValueChanged<Size> onSize;
+  final ValueChanged<Offset> onOrigin;
 
   @override
   _RenderGlassMetrics createRenderObject(BuildContext context) =>
-      _RenderGlassMetrics(onSize);
+      _RenderGlassMetrics(onSize, onOrigin);
 
   @override
   void updateRenderObject(
@@ -314,15 +346,18 @@ class _GlassMetrics extends SingleChildRenderObjectWidget {
     _RenderGlassMetrics renderObject,
   ) {
     renderObject.onSize = onSize;
+    renderObject.onOrigin = onOrigin;
   }
 }
 
 class _RenderGlassMetrics extends RenderProxyBox {
-  _RenderGlassMetrics(this.onSize);
+  _RenderGlassMetrics(this.onSize, this.onOrigin);
 
   ValueChanged<Size> onSize;
+  ValueChanged<Offset> onOrigin;
 
   Size? _reported;
+  Offset? _reportedOrigin;
 
   @override
   void performLayout() {
@@ -332,6 +367,23 @@ class _RenderGlassMetrics extends RenderProxyBox {
     _reported = current;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       onSize(current);
+    });
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
+    // 原点要在**绘制**时读：滚动不会触发布局，但玻璃在层里的位置变了。
+    // 取整到 dp，避免亚像素抖动导致每帧都重建滤镜。
+    final at = localToGlobal(Offset.zero);
+    final origin = Offset(at.dx.roundToDouble(), at.dy.roundToDouble());
+    final last = _reportedOrigin;
+    // 变化不到 2 dp 就不重建：1 dp 的偏差在折射里看不出来，
+    // 但滚动时能让每块玻璃少一半的滤镜重建。
+    if (last != null && (origin - last).distance < 2) return;
+    _reportedOrigin = origin;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      onOrigin(origin);
     });
   }
 }
@@ -497,8 +549,9 @@ class GlassBarVeil extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                tint.withValues(alpha: dark ? 0.78 : 0.86),
-                tint.withValues(alpha: dark ? 0.46 : 0.58),
+                // 顶栏和卡片用同一档透明度，滚到下面时能看见内容从下面透上来。
+                tint.withValues(alpha: dark ? 0.62 : 0.70),
+                tint.withValues(alpha: dark ? 0.34 : 0.44),
               ],
             ),
             border: Border(
@@ -628,7 +681,7 @@ class _GlassBackdropState extends State<GlassBackdrop>
                       ),
                       radius: w * 0.475,
                       color: FitColors.accent,
-                      alpha: dark ? 0.26 : 0.16,
+                      alpha: dark ? 0.26 : 0.20,
                     ),
                     (
                       center: Offset(
@@ -637,7 +690,7 @@ class _GlassBackdropState extends State<GlassBackdrop>
                       ),
                       radius: w * 0.44,
                       color: FitColors.accentLight,
-                      alpha: dark ? 0.14 : 0.10,
+                      alpha: dark ? 0.14 : 0.12,
                     ),
                     (
                       center: Offset(
@@ -646,7 +699,7 @@ class _GlassBackdropState extends State<GlassBackdrop>
                       ),
                       radius: w * 0.36,
                       color: FitColors.gold,
-                      alpha: dark ? 0.07 : 0.09,
+                      alpha: dark ? 0.07 : 0.10,
                     ),
                   ],
                 ),
@@ -768,10 +821,12 @@ class GlassDestination {
 
 /// 底部玻璃胶囊。
 ///
-/// 三层「液体」手感：
-/// 1. 选中块由**弹簧**驱动（不是固定时长的曲线），快速连点会顺着当前速度走；
-/// 2. 滑动途中按速度横向拉伸、刹车时压扁（jelly）；
-/// 3. 手指按下时，玻璃从指尖亮起并漫开，松手后收回（`_TouchGlowPainter`）。
+/// 对齐 FlClash 的「液态玻璃」导航条：
+/// 1. 选中块（透镜）宽度刚好一个格子，图标和文字都严丝合缝地居中；
+/// 2. 透镜用**弹簧**驱动，可以手指左右拖着走，松开吸附到最近的格子；
+/// 3. 拖动时按速度横向拉伸、纵向压扁（jelly），并有一道跟着走的高光；
+/// 4. 透镜里是同一排内容的**放大**版本（1.16 倍），像一块真的放大镜；
+/// 5. 玻璃本身是「外发光 + 亮边 + 内亮线 + 顶部反光 + 底部暗边」几层叠出来的。
 class GlassDock extends StatefulWidget {
   const GlassDock({
     super.key,
@@ -784,7 +839,12 @@ class GlassDock extends StatefulWidget {
   final ValueChanged<int> onSelected;
   final List<GlassDestination> destinations;
 
-  static const double _height = 56;
+  /// 和 FlClash 的 `_barHeight` 一致。
+  static const double _height = 62;
+
+  /// 透镜比胶囊上下各让出这么多，看起来是「浮在里面」。
+  /// 不能太大：透镜里是 1.12 倍的放大内容，让太多会把文字裁掉。
+  static const double _lensInset = 3;
 
   @override
   State<GlassDock> createState() => _GlassDockState();
@@ -797,25 +857,69 @@ class _GlassDockState extends State<GlassDock>
 
   late final AnimationController _glow = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 260),
-    reverseDuration: const Duration(milliseconds: 520),
+    duration: const Duration(milliseconds: 240),
+    reverseDuration: const Duration(milliseconds: 460),
   );
+
+  /// 被透镜采样的那一层（胶囊里的一排图标 + 一层底色）。
+  final GlobalKey _rowKey = GlobalKey();
+
+  /// 透镜的连续位置（单位是「第几个格子」）。
+  late final AnimationController _slide = AnimationController.unbounded(
+    vsync: this,
+    value: widget.index.toDouble(),
+  );
+
+  static final SpringDescription _spring = SpringDescription.withDampingRatio(
+    mass: 1,
+    stiffness: 320,
+    ratio: 0.86,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    // 预热：第一帧就开始加载，免得第一次滑动时透镜还是静态的。
+    DockLensProgram.warmUp();
+  }
+
+  @override
+  void didUpdateWidget(GlassDock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.index == oldWidget.index) return;
+    _settle(widget.index.toDouble());
+  }
+
+  void _settle(double target) => _settleWith(target, _slide.velocity);
+
+  void _settleWith(double target, double velocity) {
+    // 甩得越快，起点速度越大：弹簧会顺势多冲一点，再回来。
+    _slide.animateWith(
+      SpringSimulation(
+        _spring,
+        _slide.value,
+        target,
+        velocity.clamp(-4000.0, 4000.0).toDouble(),
+      ),
+    );
+  }
 
   @override
   void dispose() {
     _glow.dispose();
+    _slide.dispose();
     _glowAt.dispose();
     super.dispose();
   }
 
   void _touch(Offset at) {
-    // Listener 包的是整块玻璃，而光画在它的内边距里面，减掉这段偏移。
-    _glowAt.value = at - const Offset(6, 5);
+    // Listener 就在内边距里面，localPosition 已经是相对内容区的坐标。
+    _glowAt.value = at;
     if (!_glow.isAnimating) _glow.forward();
   }
 
   void _release() {
-    _glowAt.value = null;
+    // 只把强度收回，位置留着让光在原地淡掉；否则会「啪」一下消失。
     _glow.reverse();
   }
 
@@ -823,98 +927,234 @@ class _GlassDockState extends State<GlassDock>
   Widget build(BuildContext context) {
     final view = MediaQuery.viewPaddingOf(context);
     final dark = FitTheme.isDark(context);
+    final count = widget.destinations.length;
     return Padding(
-      // 横屏时左右可能有挖孔 / 刘海，viewPadding 会把这段让出来；
-      // 竖屏时它是 0，仍然保持 14 的视觉边距。
       padding: EdgeInsets.fromLTRB(
         14 + view.left,
         6,
         14 + view.right,
         math.max(10.0, view.bottom),
       ),
-      child: Listener(
-        behavior: HitTestBehavior.translucent,
-        onPointerDown: (event) => _touch(event.localPosition),
-        onPointerMove: (event) => _touch(event.localPosition),
-        onPointerUp: (_) => _release(),
-        onPointerCancel: (_) => _release(),
-        child: GlassSurface(
-          radius: 28,
-          blur: GlassBlur.bar,
-          tint: dark ? const Color(0xFF141A22) : Colors.white,
-          tintAlpha: dark ? 0.66 : 0.72,
-          refraction: 11,
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-          child: SizedBox(
-            height: GlassDock._height,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: AnimatedBuilder(
-                      animation: Listenable.merge([_glow, _glowAt]),
-                      builder: (context, _) => CustomPaint(
-                        painter: _TouchGlowPainter(
-                          center: _glowAt.value,
-                          strength: _glow.value,
-                          dark: dark,
+      child: GlassSurface(
+        // 胶囊实际高度是 62 + 上下 5 的内边距 = 72，半径取 34 接近正圆端。
+        radius: GlassDock._height / 2 + 3,
+        blur: GlassBlur.bar,
+        tint: dark ? const Color(0xFF0E141C) : Colors.white,
+        tintAlpha: dark ? 0.48 : 0.55,
+        refraction: 13,
+        ink: false,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+        child: SizedBox(
+          height: GlassDock._height,
+          child: count == 0
+              ? const SizedBox.shrink()
+              : LayoutBuilder(
+                  builder: (context, constraints) {
+                    final width = constraints.maxWidth;
+                    final slot = width / count;
+                    return Listener(
+                      behavior: HitTestBehavior.translucent,
+                      onPointerDown: (event) => _touch(event.localPosition),
+                      onPointerMove: (event) => _touch(event.localPosition),
+                      onPointerUp: (_) => _release(),
+                      onPointerCancel: (_) => _release(),
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        // 左右拖：透镜跟手走，松手吸附到最近的格子。
+                        onHorizontalDragStart: (_) => _slide.stop(),
+                        onHorizontalDragUpdate: (details) {
+                          if (slot <= 0) return;
+                          _slide.value =
+                              (_slide.value + details.delta.dx / slot)
+                                  .clamp(0.0, (count - 1).toDouble())
+                                  .toDouble();
+                        },
+                        onHorizontalDragEnd: (details) {
+                          final target = _slide.value.round();
+                          _settleWith(
+                            target.toDouble(),
+                            details.velocity.pixelsPerSecond.dx,
+                          );
+                          if (target != widget.index) {
+                            widget.onSelected(target);
+                          }
+                        },
+                        child: AnimatedBuilder(
+                        animation: Listenable.merge([_slide, _glow, _glowAt]),
+                        builder: (context, _) {
+                          final value = _slide.value
+                              .clamp(0.0, (count - 1).toDouble())
+                              .toDouble();
+                          final velocity = _slide.velocity;
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              // 1. 指尖的光
+                              if (_glow.value > 0.001 && _glowAt.value != null)
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    child: CustomPaint(
+                                      painter: _TouchGlowPainter(
+                                        center: _glowAt.value,
+                                        strength: _glow.value,
+                                        dark: dark,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              // 2. 内容（透镜会盖在它上面，并且采样它）
+                              Positioned.fill(
+                                child: RepaintBoundary(
+                                  key: _rowKey,
+                                  // 垫一层底色：截图带 alpha 的话，透镜
+                                  // 采样到透明处会发黑。
+                                  child: ColoredBox(
+                                    color: dark
+                                        ? const Color(0xFF0E141C)
+                                        : Colors.white,
+                                    child: _dockRow(
+                                      count: count,
+                                      selected: widget.index,
+                                      onTap: widget.onSelected,
+                                      magnified: false,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              // 3. 透镜 + 透镜里被折射放大的内容
+                              ..._lens(
+                                width: width,
+                                slot: slot,
+                                value: value,
+                                velocity: velocity,
+                                dark: dark,
+                              ),
+                            ],
+                          );
+                        },
                         ),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+
+  /// 透镜：玻璃块 + 里面放大的那排内容。
+  List<Widget> _lens({
+    required double width,
+    required double slot,
+    required double value,
+    required double velocity,
+    required bool dark,
+  }) {
+    const height = GlassDock._height;
+    // 速度 → 拉伸 / 压扁。钳得比 FlClash 保守一点，免得低帧率下抽动。
+    final pull = (velocity * 0.020).clamp(-0.14, 0.16).toDouble();
+    final baseWidth = math.max(slot - 8, 48.0);
+    final lensWidth = baseWidth * (1 + pull);
+    final lensHeight = (height - GlassDock._lensInset * 2) * (1 - pull.abs() * 0.22);
+    final center = slot * (value + 0.5);
+    final left = center - lensWidth / 2;
+    final top = (height - lensHeight) / 2;
+
+    // 放大镜的缩放中心：让透镜中心那一点在放大后仍然落在透镜中心。
+    final alignX = width <= 0 ? 0.0 : (center / width) * 2 - 1;
+    // 拖动强度 0..1：拖得越快，边缘镜面越亮。
+    final lift = (pull.abs() / 0.16).clamp(0.0, 1.0).toDouble();
+
+    return [
+      Positioned(
+        left: left,
+        top: top,
+        width: lensWidth,
+        height: lensHeight,
+        child: IgnorePointer(
+          child: CustomPaint(
+            painter: _DockLensPainter(
+              dark: dark,
+              radius: lensHeight / 2,
+              lift: lift,
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        left: left,
+        top: top,
+        width: lensWidth,
+        height: lensHeight,
+        child: IgnorePointer(
+          child: DockLensContent(
+            // 用真·折射：抓胶囊自己那一层，按透镜形状放大 + 弯折 + 色散。
+            sourceKey: _rowKey,
+            rect: Rect.fromLTWH(left, top, lensWidth, lensHeight),
+            radius: lensHeight / 2,
+            dark: dark,
+            magnify: 1.14,
+            bend: math.min(10.0, lensHeight * 0.22),
+            dispersion: 2.4,
+            rim: 0.20 + 0.14 * lift,
+            darken: 0.10,
+            // 着色器 / 截图不可用时，退回旧的「复制一份再放大」。
+            fallback: ClipRRect(
+              borderRadius: BorderRadius.circular(lensHeight / 2),
+              child: OverflowBox(
+                alignment: Alignment.topLeft,
+                minWidth: width,
+                maxWidth: width,
+                minHeight: height,
+                maxHeight: height,
+                child: Transform.translate(
+                  offset: Offset(-left, -top),
+                  child: SizedBox(
+                    width: width,
+                    height: height,
+                    child: Transform.scale(
+                      scale: 1.12,
+                      alignment: Alignment(alignX, 0),
+                      child: _dockRow(
+                        count: widget.destinations.length,
+                        selected: value.round(),
+                        onTap: null,
+                        magnified: true,
                       ),
                     ),
                   ),
                 ),
-                _LiquidIndex(
-                  index: widget.index,
-                  builder: (context, value, velocity) {
-                    return LayoutBuilder(
-                      builder: (context, constraints) {
-                        final count = widget.destinations.length;
-                        if (count == 0) return const SizedBox.shrink();
-                        final slot = constraints.maxWidth / count;
-                        final position = value.clamp(0.0, count - 1.0).toDouble();
-                        final center = slot * (position + 0.5);
-                        // 速度 → 拉伸 / 压扁：和 FlClash 的 jelly 同一思路。
-                        final pull = (velocity * 0.055).clamp(-0.22, 0.26).toDouble();
-                        final width = math.min(slot * 0.78, 96.0) * (1 + pull);
-                        final height = GlassDock._height * (1 - pull.abs() * 0.30);
-                        final travel = position - position.floorToDouble();
-                        return Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Positioned(
-                              left: center - width / 2,
-                              top: (GlassDock._height - height) / 2,
-                              width: width,
-                              height: height,
-                              child: _DockIndicator(
-                                travel: travel,
-                                lift: pull.abs() / 0.26,
-                                dark: dark,
-                              ),
-                            ),
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                for (var i = 0; i < count; i++)
-                                  Expanded(
-                                    child: _DockTab(
-                                      destination: widget.destinations[i],
-                                      selected: i == widget.index,
-                                      onTap: () => widget.onSelected(i),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ],
-                        );
-                      },
-                    );
-                  },
-                ),
-              ],
+              ),
             ),
           ),
         ),
+      ),
+    ];
+  }
+
+  /// 一排图标 + 文字。`magnified` 时只画一次（透镜里的副本）。
+  Widget _dockRow({
+    required int count,
+    required int selected,
+    required ValueChanged<int>? onTap,
+    required bool magnified,
+  }) {
+    final select = onTap;
+    return ExcludeSemantics(
+      excluding: magnified,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < count; i++)
+            Expanded(
+              child: _DockTab(
+                destination: widget.destinations[i],
+                selected: i == selected,
+                onTap: select == null ? null : () => select(i),
+                interactive: !magnified,
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -942,7 +1182,7 @@ class _TouchGlowPainter extends CustomPainter {
         at,
         reach,
         [
-          Colors.white.withValues(alpha: (dark ? 0.16 : 0.22) * strength),
+          Colors.white.withValues(alpha: (dark ? 0.14 : 0.20) * strength),
           Colors.white.withValues(alpha: 0.04 * strength),
           Colors.white.withValues(alpha: 0),
         ],
@@ -958,169 +1198,111 @@ class _TouchGlowPainter extends CustomPainter {
       oldDelegate.dark != dark;
 }
 
-/// 把「当前分页」变成一个连续的动画值。
-///
-/// 用**弹簧**而不是固定时长曲线：`AnimationController.unbounded` +
-/// [SpringSimulation]。好处是连续换页时从当前**速度**接着走，
-/// 快速点 设备 → 设置 → 扫描 不会跳位，也不会像曲线那样在终点硬停。
-class _LiquidIndex extends StatefulWidget {
-  const _LiquidIndex({required this.index, required this.builder});
-
-  final int index;
-  final Widget Function(BuildContext context, double value, double velocity)
-      builder;
-
-  @override
-  State<_LiquidIndex> createState() => _LiquidIndexState();
-}
-
-class _LiquidIndexState extends State<_LiquidIndex>
-    with SingleTickerProviderStateMixin {
-  /// 质量 1、刚度 165、阻尼比 0.82：约 0.35 s 到位，带一点点回弹。
-  static final SpringDescription _spring = SpringDescription.withDampingRatio(
-    mass: 1,
-    stiffness: 165,
-    ratio: 0.82,
-  );
-
-  late final AnimationController _controller = AnimationController.unbounded(
-    vsync: this,
-    value: widget.index.toDouble(),
-  );
-
-  @override
-  void didUpdateWidget(covariant _LiquidIndex oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.index == oldWidget.index) return;
-    // 从当前值和当前速度出发，弹簧会自己算出该走多快。
-    _controller.animateWith(
-      SpringSimulation(
-        _spring,
-        _controller.value,
-        widget.index.toDouble(),
-        _controller.velocity,
-      ),
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) =>
-          widget.builder(context, _controller.value, _controller.velocity),
-    );
-  }
-}
-
-/// 选中块：玻璃色块 + 一道跟着滑动走的高光。
-class _DockIndicator extends StatelessWidget {
-  const _DockIndicator({
-    required this.travel,
-    required this.lift,
+/// 透镜本体：外发光 + 玻璃底 + 两道亮边 + 顶部反光 + 底部暗边。
+class _DockLensPainter extends CustomPainter {
+  const _DockLensPainter({
     required this.dark,
+    required this.radius,
+    required this.lift,
   });
 
-  /// 在一个格子里的进度 0..1。
-  final double travel;
-
-  /// 滑动强度 0..1（速度越大越亮）。
-  final double lift;
-
   final bool dark;
+  final double radius;
 
-  @override
-  Widget build(BuildContext context) {
-    final accent = FitTheme.accentOf(context);
-    return CustomPaint(
-      painter: _IndicatorPainter(
-        travel: travel,
-        lift: lift,
-        dark: dark,
-        accent: accent,
-      ),
-    );
-  }
-}
-
-class _IndicatorPainter extends CustomPainter {
-  const _IndicatorPainter({
-    required this.travel,
-    required this.lift,
-    required this.dark,
-    required this.accent,
-  });
-
-  final double travel;
+  /// 拖动强度 0..1：越拖越亮，停下来回到常态。
   final double lift;
-  final bool dark;
-  final Color accent;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
     final rect = Offset.zero & size;
-    final rrect = RRect.fromRectAndRadius(
-      rect,
-      Radius.circular(size.height / 2),
+    final shape = RRect.fromRectAndRadius(rect, Radius.circular(radius));
+    final accent = dark ? const Color(0xFF7FB6FF) : const Color(0xFF2E7BD6);
+
+    // 1. 外发光：透镜浮在玻璃上，边缘有一圈很淡的投影。
+    canvas.drawRRect(
+      shape,
+      Paint()
+        ..color = (dark ? Colors.black : accent).withValues(alpha: 0.22)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
     );
 
+    // 2. 玻璃底：上亮下暗，像一块被折起来的玻璃。
     canvas.drawRRect(
-      rrect,
+      shape,
       Paint()
         ..shader = ui.Gradient.linear(
-          rect.topLeft,
-          rect.bottomRight,
+          rect.topCenter,
+          rect.bottomCenter,
+          dark
+              ? [
+                  Colors.white.withValues(alpha: 0.22),
+                  Colors.white.withValues(alpha: 0.06),
+                ]
+              : [
+                  Colors.white.withValues(alpha: 0.92),
+                  Colors.white.withValues(alpha: 0.58),
+                ],
+        ),
+    );
+
+    // 3. 顶部反光：只铺上半部分，透镜才有弧度。
+    canvas.save();
+    canvas.clipRRect(shape);
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height * 0.55),
+      Paint()
+        ..shader = ui.Gradient.linear(
+          Offset(0, 0),
+          Offset(0, size.height * 0.55),
           [
-            accent.withValues(alpha: dark ? 0.30 : 0.18),
-            accent.withValues(alpha: dark ? 0.14 : 0.08),
+            Colors.white.withValues(alpha: dark ? 0.20 : 0.55),
+            Colors.white.withValues(alpha: 0),
           ],
         ),
     );
+    canvas.restore();
+
+    // 4. 外沿亮边 + 内圈细亮线：两道反射。
     canvas.drawRRect(
-      rrect.deflate(0.6),
+      shape.deflate(0.6),
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2
-        ..color = accent.withValues(alpha: dark ? 0.34 : 0.22),
+        ..color = (dark ? Colors.white : Colors.white)
+            .withValues(alpha: dark ? 0.36 : 0.95),
+    );
+    canvas.drawRRect(
+      shape.deflate(2.2),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.9
+        ..color = accent.withValues(alpha: 0.20 + 0.25 * lift),
     );
 
-    // 高光带：滑动时从一侧扫到另一侧，停下（lift→0）就淡掉。
-    if (lift > 0.01) {
-      canvas.save();
-      canvas.clipRRect(rrect);
-      final x = size.width * (0.15 + 0.70 * travel);
-      final band = size.width * 0.42;
-      canvas.drawRect(
-        rect,
-        Paint()
-          ..shader = ui.Gradient.linear(
-            Offset(x - band, 0),
-            Offset(x + band, size.height * 1.4),
-            [
-              Colors.white.withValues(alpha: 0),
-              Colors.white.withValues(alpha: (dark ? 0.16 : 0.30) * lift),
-              Colors.white.withValues(alpha: 0),
-            ],
-            const [0.0, 0.5, 1.0],
-          ),
-      );
-      canvas.restore();
-    }
+    // 5. 底部暗边：光从上面来，下面要沉下去。
+    canvas.drawRRect(
+      shape.deflate(1.0),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.0
+        ..shader = ui.Gradient.linear(
+          rect.topCenter,
+          rect.bottomCenter,
+          [
+            Colors.transparent,
+            Colors.black.withValues(alpha: dark ? 0.26 : 0.10),
+          ],
+          const [0.5, 1.0],
+        ),
+    );
   }
 
   @override
-  bool shouldRepaint(_IndicatorPainter oldDelegate) =>
-      oldDelegate.travel != travel ||
-      oldDelegate.lift != lift ||
+  bool shouldRepaint(_DockLensPainter oldDelegate) =>
       oldDelegate.dark != dark ||
-      oldDelegate.accent != accent;
+      oldDelegate.radius != radius ||
+      oldDelegate.lift != lift;
 }
 
 class _DockTab extends StatelessWidget {
@@ -1128,11 +1310,15 @@ class _DockTab extends StatelessWidget {
     required this.destination,
     required this.selected,
     required this.onTap,
+    this.interactive = true,
   });
 
   final GlassDestination destination;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+
+  /// 透镜里的放大副本不可点。
+  final bool interactive;
 
   @override
   Widget build(BuildContext context) {
@@ -1140,44 +1326,47 @@ class _DockTab extends StatelessWidget {
     final accent = FitTheme.accentOf(context);
     final muted = theme.colorScheme.onSurface.withValues(alpha: 0.55);
     final base = theme.textTheme.labelSmall ?? const TextStyle();
+
+    final content = Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            selected ? destination.selectedIcon : destination.icon,
+            size: 21,
+            color: selected ? accent : muted,
+          ),
+          const SizedBox(height: 3),
+          Text(
+            destination.label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: base.copyWith(
+              fontSize: 10,
+              height: 1.1,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              color: selected ? accent : muted,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (!interactive || onTap == null) {
+      return IgnorePointer(child: content);
+    }
+    // 不用 InkWell：水波是圆的、半径还跟着 Material 祖先走，
+    // 在胶囊上会画出一个比格子还大的蓝圈（0.8.14 之前的截图就是这样）。
     return Semantics(
       button: true,
       selected: selected,
       label: destination.label,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(18),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            AnimatedScale(
-              scale: selected ? 1.08 : 1,
-              duration: GlassMotion.dock,
-              curve: Curves.easeOutBack,
-              child: Icon(
-                selected ? destination.selectedIcon : destination.icon,
-                size: 20,
-                color: selected ? accent : muted,
-              ),
-            ),
-            const SizedBox(height: 3),
-            AnimatedDefaultTextStyle(
-              duration: GlassMotion.fade,
-              curve: Curves.easeOut,
-              style: base.copyWith(
-                fontSize: 10,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? accent : muted,
-              ),
-              child: Text(
-                destination.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ],
-        ),
+        child: content,
       ),
     );
   }
@@ -1308,32 +1497,20 @@ class LiquidPageView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final reduce = GlassMotion.reduce(context);
+    // 不能给「玻璃页面」做透明度动画：AnimatedOpacity 会开一个 saveLayer，
+    // 两个页面同时存在时每块玻璃的 BackdropFilter 会把**另一个页面**也
+    // 一起模糊进去，切换的一瞬间整屏发白 —— 也就是用户看到的闪屏。
+    // 这里只让当前页参与绘制，其余 Offstage（不 paint、不占 GPU），
+    // 切换是瞬时的，但不会再闪；ticker 也一起停掉，后台页不烧电。
     return Stack(
       fit: StackFit.expand,
       children: [
         for (var i = 0; i < children.length; i++)
-          Positioned.fill(
-            child: IgnorePointer(
-              ignoring: i != index,
-              child: ExcludeSemantics(
-                excluding: i != index,
-                child: AnimatedOpacity(
-                  opacity: i == index ? 1 : 0,
-                  duration: reduce ? Duration.zero : GlassMotion.fade,
-                  curve: Curves.easeInOut,
-                  child: AnimatedSlide(
-                    offset: i == index
-                        ? Offset.zero
-                        : Offset(i < index ? -0.05 : 0.05, 0),
-                    duration: reduce ? Duration.zero : GlassMotion.page,
-                    curve: Curves.easeOutCubic,
-                    // 不在前台的分页停掉所有 ticker（骨架屏呼吸、进度动画），
-                    // 免得四个页面一起烧电。
-                    child: TickerMode(enabled: i == index, child: children[i]),
-                  ),
-                ),
-              ),
+          Offstage(
+            offstage: i != index,
+            child: TickerMode(
+              enabled: i == index,
+              child: children[i],
             ),
           ),
       ],
@@ -1403,6 +1580,25 @@ class _GlassRimPainter extends CustomPainter {
         const [0, 0.55, 1],
       );
     canvas.drawRRect(rrect, rim);
+
+    // 第二道：内圈 0.8 px 的亮线。玻璃边缘不止一道反射，
+    // 只有外圈时看起来像塑料贴纸。
+    canvas.drawRRect(
+      rrect.deflate(2.0),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8
+        ..shader = ui.Gradient.linear(
+          rect.topLeft,
+          rect.bottomRight,
+          [
+            Colors.white.withValues(alpha: (dark ? 0.16 : 0.34) * strength),
+            Colors.white.withValues(alpha: 0),
+            Colors.white.withValues(alpha: (dark ? 0.06 : 0.12) * strength),
+          ],
+          const [0, 0.5, 1],
+        ),
+    );
 
     // 顶部反光：玻璃被光压到的那一条边。只铺最上面 14 px，
     // 不要盖住卡片标题（内边距 16 px 起），否则深色字会被洗淡。

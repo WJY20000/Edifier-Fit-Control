@@ -100,6 +100,9 @@ class GlassLens {
   /// 前两个 float（纹理尺寸）由引擎写入，所以从下标 2 开始。
   ui.ImageFilter? filter({
     required Size size,
+    /// 这块玻璃左上角在背景纹理里的位置（dp）。着色器要用它把
+    /// 「整层像素坐标」换算回玻璃自己的坐标，见 shaders/glass_refraction.frag。
+    Offset origin = Offset.zero,
     required double devicePixelRatio,
     required double radius,
     required double blurSigma,
@@ -117,6 +120,8 @@ class GlassLens {
     final values = <double>[
       size.width,
       size.height,
+      origin.dx,
+      origin.dy,
       devicePixelRatio <= 0 ? 1.0 : devicePixelRatio,
       radius,
       radius,

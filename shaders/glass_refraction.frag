@@ -23,6 +23,7 @@ uniform sampler2D uTexture;
 
 // —— 应用写入，顺序见 glass_optics.dart ——
 uniform vec2 uDp;          // 玻璃尺寸（dp）
+uniform vec2 uOrigin;      // 玻璃左上角在背景纹理里的位置（dp）
 uniform float uDpr;        // 设备像素比
 uniform vec4 uCorners;     // 圆角：左上、右上、右下、左下（dp）
 uniform float uBevel;      // 边缘斜面宽度（dp）
@@ -52,18 +53,31 @@ float sdRoundBox(vec2 p, vec2 b, float r) {
   return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
 }
 
+/// 采样。传入的是**从上往下**的纹理像素坐标（main 里已经统一过）。
 vec4 sampleAt(vec2 px) {
   vec2 uv = px / uSize;
-#ifdef IMPELLER_TARGET_OPENGLES
-  // GLES 后端的 y 轴方向相反。
-  uv.y = 1.0 - uv.y;
-#endif
   return texture(uTexture, clamp(uv, vec2(0.0005), vec2(0.9995)));
 }
 
-void main() {
+/// 把 FlutterFragCoord 统一成「左上角为原点、y 向下」的纹理像素坐标。
+/// GLES 后端的 y 轴方向相反（gl_FragCoord 自下而上）。
+vec2 topDownCoord() {
   vec2 px = FlutterFragCoord().xy;
-  vec2 p = px / max(uDpr, 1.0);          // dp
+#ifdef IMPELLER_TARGET_OPENGLES
+  px.y = uSize.y - px.y;
+#endif
+  return px;
+}
+
+void main() {
+  // 关键：ImageFilter.shader 拿到的是一整层背景纹理（引擎把着色器铺在
+  // 和纹理一样大的矩形上，见 impeller/content.../runtime_effect_filter_contents.cc），
+  // 所以 FlutterFragCoord 是**整层**的像素坐标，不是这块玻璃的局部坐标。
+  // 必须减掉玻璃自己在纹理里的原点，否则圆角、法线全画在屏幕左上角，
+  // 下方的卡片就会在边缘采到卡片外面的阴影，出现灰边和彩边。
+  float dpr = max(uDpr, 1.0);
+  vec2 px = topDownCoord();
+  vec2 p = (px - uOrigin * dpr) / dpr;   // 相对玻璃左上角的 dp
   vec2 halfSize = uDp * 0.5;
   vec2 c = p - halfSize;
 
@@ -105,11 +119,14 @@ void main() {
   float luma = dot(base.rgb, vec3(0.2126, 0.7152, 0.0722));
   vec3 color = mix(vec3(luma), base.rgb, uSaturation);
 
-  // 镜面高光：边缘一圈，上下最强、左右收窄；接近边缘时迅速衰减。
+  // 镜面高光：两层。外层宽、暗，内层窄、亮 —— 玻璃边缘有两道反射，
+  // 单层看起来像塑料。
   float band = 1.0 - clamp(inset / max(bevel * 0.9, 1e-3), 0.0, 1.0);
   float facing = 0.30 + 0.70 * clamp(abs(normal.y), 0.0, 1.0);
-  float shine = uRim * band * band * facing;
-  color += vec3(shine);
+  float outer = uRim * band * band * facing;
+  float band2 = 1.0 - clamp(inset / max(bevel * 0.30, 1e-3), 0.0, 1.0);
+  float inner = uRim * 0.55 * band2 * band2 * facing;
+  color += vec3(outer + inner);
 
   // 边缘暗线：玻璃和背景的分界，让轮廓「立」起来。
   float line = 1.0 - clamp(inset / 1.2, 0.0, 1.0);
