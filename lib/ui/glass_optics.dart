@@ -138,10 +138,9 @@ class GlassLens {
       for (var i = 0; i < values.length; i++) {
         shader.setFloat(i + 2, values[i]);
       }
-      final optical = ui.ImageFilter.shader(
-        shader,
-        filterQuality: ui.FilterQuality.medium,
-      );
+      // 这个 SDK 的 ImageFilter.shader 只有 shader 一个参数，
+      // 采样质量用默认值（写 filterQuality: 会直接编译不过）。
+      final optical = ui.ImageFilter.shader(shader);
       if (blurSigma <= 0.01) return optical;
       // 先磨砂、再折射：着色器读到的是已经糊过的背景，
       // 这样玻璃「厚」而不是一面镜子。
