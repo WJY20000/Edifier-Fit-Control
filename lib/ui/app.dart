@@ -8,6 +8,7 @@ import '../platform/quit.dart';
 import '../state/session.dart';
 import 'device_page.dart';
 import 'glass.dart';
+import 'glass_optics.dart';
 import 'lab_page.dart';
 import 'scan_page.dart';
 import 'settings_page.dart';
@@ -35,6 +36,9 @@ class _FitAppState extends State<FitApp> {
   @override
   void initState() {
     super.initState();
+    // 着色器是异步加载的：启动时就预热，免得第一帧还是纯磨砂、
+    // 半秒后突然「变成玻璃」。
+    GlassOptics.warmUp();
     _lifecycle = AppLifecycleListener(
       // 和「设置 → 退出应用」完全是同一条路径：断开耳机 → 结束进程。
       // quitApp 内部有兜底定时器，清理卡住也会 exit(0)，不会留下后台进程。

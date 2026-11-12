@@ -410,7 +410,13 @@ class _DeviceTile extends StatelessWidget {
             ? device.name!
             : l10n.t('scan.unknownDevice');
 
+    // 列表项不套 BackdropFilter：扫描页一屏能有十来项，
+    // 每项一块「模糊 + 折射」会拖垮滑动。这里只留染色 + 描边 + 阴影，
+    // 观感几乎一样，开销少一个数量级。
     return GlassSurface(
+      blur: 0,
+      refraction: 0,
+      tintAlpha: FitTheme.isDark(context) ? 0.62 : 0.74,
       child: InkWell(
         borderRadius: BorderRadius.circular(FitRadius.card),
         onTap: connecting || isCurrent ? null : onTap,

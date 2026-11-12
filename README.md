@@ -181,13 +181,16 @@ lib/
     ble_controller.dart     扫描 / 连接 / GATT 选择（universal_ble）
   state/session.dart        应用状态与偏好
   ui/                       四个页面 + 主题 + 通用组件
-    glass.dart              液态玻璃：磨砂面板 / 色光背景 / 底部胶囊 / 分页转场
+    glass.dart              液态玻璃：面板 / 玻璃按钮 / 色光背景 / 底部胶囊 / 分页转场
+    glass_optics.dart       折射着色器的加载与 uniform 绑定（Impeller 专用，失败自动回退）
   i18n/l10n.dart            中英文案
 test/                       帧编解码与读取流程的单元测试
 tool/
   bootstrap.dart            生成平台目录并打补丁（CI 与本地共用）
   make_icons.py             生成 PNG / ICO 图标
   decode_btsnoop.py         Android HCI 抓包解码器
+shaders/
+  glass_refraction.frag     玻璃折射：圆角剖面偏移 + 色散 + 镜面 + 触摸光
 docs/PROTOCOL.md            协议笔记（含 2026-11-08 真机抓包结论）
 docs/CAPTURE.md             抓包手册：已确认命令与抓包方法
 ```
@@ -201,7 +204,8 @@ docs/CAPTURE.md             抓包手册：已确认命令与抓包方法
 - [TIANLI0/EncoDeck](https://github.com/TIANLI0/EncoDeck)（C#，BES v2 帧、降噪槽位）
 - [Navideck/universal_ble](https://github.com/Navideck/universal_ble)（BSD-3，跨平台 BLE）
 - [chen08209/FlClash](https://github.com/chen08209/FlClash)（GPL-3.0，视觉参考：
-  0.8.10 的液态玻璃、底部胶囊和页面转场参考了它的设计语言，代码为独立实现）
+  0.8.10 起的液态玻璃、折射、底部胶囊和页面转场参考了它的设计语言，
+  着色器与 Dart 代码为独立实现）
 
 ## 许可证
 

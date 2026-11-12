@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../config.dart';
 import '../protocol/engine.dart';
-import '../protocol/frame.dart';
 import '../protocol/models.dart';
 import '../protocol/opcodes.dart';
 import '../state/session.dart';

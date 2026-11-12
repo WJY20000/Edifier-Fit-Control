@@ -5,9 +5,6 @@ import 'package:flutter/material.dart';
 import 'glass.dart';
 import 'theme.dart';
 
-/// 卡片语气：普通白/深灰卡、轻填充卡。
-enum CardTone { plain, soft }
-
 /// 统一的分组卡片：可选图标、标题、说明、右上角附加控件。
 class SectionCard extends StatelessWidget {
   const SectionCard({
@@ -17,7 +14,6 @@ class SectionCard extends StatelessWidget {
     this.subtitle,
     this.trailing,
     this.icon,
-    this.tone = CardTone.plain,
     this.padding = const EdgeInsets.fromLTRB(18, 16, 18, 18),
   });
 
@@ -26,7 +22,6 @@ class SectionCard extends StatelessWidget {
   final Widget? trailing;
   final Widget child;
   final IconData? icon;
-  final CardTone tone;
   final EdgeInsets padding;
 
   @override
@@ -80,23 +75,6 @@ class SectionCard extends StatelessWidget {
       ),
     );
 
-    if (tone == CardTone.soft) {
-      // 轻填充卡：仍然是一块玻璃，但更薄、不投影，
-      // 嵌在另一张玻璃卡里时不会出现两层阴影叠在一起。
-      return GlassSurface(
-        tintAlpha: FitTheme.isDark(context) ? 0.22 : 0.30,
-        blur: 8,
-        shadow: false,
-        rim: false,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(FitRadius.card),
-            border: Border.all(color: FitTheme.hairline(context)),
-          ),
-          child: body,
-        ),
-      );
-    }
     return GlassSurface(child: body);
   }
 }
@@ -289,81 +267,60 @@ class OptionTile extends StatelessWidget {
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 180),
         opacity: enabled ? 1 : 0.55,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(FitRadius.tile),
-            onTap: enabled ? onTap : null,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 190),
-              curve: Curves.easeOutCubic,
-              padding: EdgeInsets.symmetric(
-                horizontal: compact ? 4 : 8,
-                vertical: compact ? 10 : 12,
-              ),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(FitRadius.tile),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: active
-                      ? [
-                          FitColors.accent.withValues(alpha: dark ? 0.26 : 0.14),
-                          FitColors.accent.withValues(alpha: dark ? 0.12 : 0.06),
-                        ]
-                      : [
-                          FitTheme.faint(context),
-                          FitTheme.faint(context).withValues(alpha: 0.5),
-                        ],
+        child: GlassPressScale(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(FitRadius.tile),
+              onTap: enabled ? onTap : null,
+              child: GlassChipSurface(
+                selected: active,
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 4 : 8,
+                  vertical: compact ? 10 : 12,
                 ),
-                border: Border.all(
-                  width: 1,
-                  color: active
-                      ? FitColors.accent.withValues(alpha: dark ? 0.55 : 0.42)
-                      : Colors.transparent,
-                ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (icon != null)
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 190),
-                      width: compact ? 30 : 34,
-                      height: compact ? 30 : 34,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: active
-                            ? FitColors.accent.withValues(alpha: 0.16)
-                            : Colors.transparent,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (icon != null)
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 190),
+                        width: compact ? 30 : 34,
+                        height: compact ? 30 : 34,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: active
+                              ? FitColors.accent.withValues(alpha: 0.16)
+                              : Colors.transparent,
+                        ),
+                        child: Icon(icon, size: compact ? 18 : 20, color: iconColor),
                       ),
-                      child: Icon(icon, size: compact ? 18 : 20, color: iconColor),
-                    ),
-                  if (icon != null) const SizedBox(height: 6),
-                  Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      fontSize: compact ? 10.5 : 11.5,
-                      fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-                      color: active ? theme.colorScheme.onSurface : muted,
-                    ),
-                  ),
-                  if (sublabel != null) ...[
-                    const SizedBox(height: 2),
+                    if (icon != null) const SizedBox(height: 6),
                     Text(
-                      sublabel!,
+                      label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        fontSize: 9.5,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.42),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        fontSize: compact ? 10.5 : 11.5,
+                        fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+                        color: active ? theme.colorScheme.onSurface : muted,
                       ),
                     ),
+                    if (sublabel != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        sublabel!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          fontSize: 9.5,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.42),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),

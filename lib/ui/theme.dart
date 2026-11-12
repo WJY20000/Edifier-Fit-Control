@@ -121,8 +121,15 @@ class FitTheme {
         ),
       ),
       chipTheme: base.chipTheme.copyWith(
-        side: BorderSide.none,
-        backgroundColor: faintOf(base),
+        // 和 OptionTile 用同一套「玻璃片」：半透明 + 一圈亮边。
+        side: BorderSide(
+          color: dark
+              ? Colors.white.withValues(alpha: 0.12)
+              : Colors.black.withValues(alpha: 0.06),
+        ),
+        backgroundColor: dark
+            ? Colors.white.withValues(alpha: 0.07)
+            : Colors.white.withValues(alpha: 0.78),
         selectedColor: FitColors.accent.withValues(alpha: 0.16),
         labelStyle: TextStyle(
           fontSize: 12.5,
@@ -147,6 +154,38 @@ class FitTheme {
         elevation: 0,
         centerTitle: false,
       ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          backgroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return FitColors.accent.withValues(alpha: dark ? 0.30 : 0.18);
+            }
+            return dark
+                ? Colors.white.withValues(alpha: 0.06)
+                : Colors.white.withValues(alpha: 0.62);
+          }),
+          foregroundColor: WidgetStateProperty.resolveWith((states) {
+            if (states.contains(WidgetState.selected)) {
+              return dark ? Colors.white : FitColors.accentDeep;
+            }
+            return colors.onSurface.withValues(alpha: 0.80);
+          }),
+          side: WidgetStatePropertyAll(
+            BorderSide(
+              color: dark
+                  ? Colors.white.withValues(alpha: 0.12)
+                  : Colors.black.withValues(alpha: 0.06),
+            ),
+          ),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          elevation: const WidgetStatePropertyAll<double?>(0.0),
+          textStyle: const WidgetStatePropertyAll<TextStyle?>(
+            TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           shape: RoundedRectangleBorder(
@@ -154,6 +193,12 @@ class FitTheme {
           ),
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
           textStyle: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+          // 主操作也当玻璃做：底边压暗、顶边提亮，外面一圈品牌色辉光。
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: dark ? 0.22 : 0.45),
+          ),
+          shadowColor: FitColors.accent.withValues(alpha: 0.55),
+          elevation: 3,
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -161,10 +206,13 @@ class FitTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(14),
           ),
+          backgroundColor: dark
+              ? Colors.white.withValues(alpha: 0.06)
+              : Colors.white.withValues(alpha: 0.66),
           side: BorderSide(
             color: dark
-                ? Colors.white.withValues(alpha: 0.12)
-                : Colors.black.withValues(alpha: 0.10),
+                ? Colors.white.withValues(alpha: 0.16)
+                : Colors.black.withValues(alpha: 0.08),
           ),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
           textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),

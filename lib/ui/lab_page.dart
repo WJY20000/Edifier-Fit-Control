@@ -5,7 +5,7 @@ import '../protocol/engine.dart';
 import '../protocol/opcodes.dart';
 import '../state/session.dart';
 import 'glass.dart';
-import 'widgets.dart';
+import 'theme.dart';
 
 /// 实验室：手动发命令、看原始收发。
 class LabPage extends StatefulWidget {
@@ -295,11 +295,32 @@ class _Quick extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(right: 8),
-      child: ActionChip(
-        label: Text(label, style: const TextStyle(fontSize: 11.5)),
-        onPressed: onTap,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.45,
+        child: GlassPressScale(
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(FitRadius.pill),
+              onTap: onTap,
+              child: GlassChipSurface(
+                radius: FitRadius.pill,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                child: Text(
+                  label,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
