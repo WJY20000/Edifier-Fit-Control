@@ -8,7 +8,7 @@ import '../platform/quit.dart';
 import '../state/session.dart';
 import 'device_page.dart';
 import 'glass.dart';
-import 'glass_optics.dart';
+import 'glass_render.dart';
 import 'lab_page.dart';
 import 'scan_page.dart';
 import 'settings_page.dart';
@@ -36,9 +36,9 @@ class _FitAppState extends State<FitApp> {
   @override
   void initState() {
     super.initState();
-    // 着色器是异步加载的：启动时就预热，免得第一帧还是纯磨砂、
+    // 面板着色器异步加载：启动就预热，免得第一帧还是纯色、
     // 半秒后突然「变成玻璃」。
-    GlassOptics.warmUp();
+    GlassPaneProgram.warmUp();
     _lifecycle = AppLifecycleListener(
       // 和「设置 → 退出应用」完全是同一条路径：断开耳机 → 结束进程。
       // quitApp 内部有兜底定时器，清理卡住也会 exit(0)，不会留下后台进程。
@@ -302,13 +302,25 @@ class _HomeShellState extends State<HomeShell> {
           return GlassBackdrop(
             child: Scaffold(
               // 背景由 GlassBackdrop 负责画。Scaffold 必须透明，
-              // 否则磨砂层背后是一块纯色，模糊和色光都看不见。
+              // 否则玻璃背后是一块纯色，色光看不见。
               backgroundColor: Colors.transparent,
+              // 内容延伸到胶囊下面：底部胶囊才能把滚过去的列表
+              // **真的折进玻璃里**（FlClash 也是这么做的）。
+              extendBody: true,
               appBar: wide ? null : _buildPhoneBar(l10n, titles[_index]),
               body: wide
                   ? _buildWideBody(titles[_index], body, maxWidth, destinations)
-                  // 顶栏 / 底部胶囊各自处理了系统栏，这里只留左右。
-                  : SafeArea(top: false, bottom: false, child: body),
+                  : SafeArea(
+                      top: false,
+                      bottom: false,
+                      // 整页内容截成一张纹理：顶栏与底部胶囊从这里采样。
+                      // 只包 body（不含胶囊本身）—— 没有自我采样。
+                      child: GlassCapture(
+                        kind: GlassSourceKind.content,
+                        interval: 2,
+                        child: body,
+                      ),
+                    ),
               bottomNavigationBar: wide
                   ? null
                   : GlassDock(

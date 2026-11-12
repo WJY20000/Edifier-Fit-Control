@@ -242,7 +242,7 @@ class _ScanPageState extends State<ScanPage> {
                   },
                 )
               : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 28),
+                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 124),
                   itemCount: shown.length + (_source == _Source.system ? 1 : 0),
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (context, index) {

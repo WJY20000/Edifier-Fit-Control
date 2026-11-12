@@ -27,7 +27,7 @@ class SettingsPage extends StatelessWidget {
     // 在无头测试（以及很矮的窗口）里根本不会被创建，测试只能靠滚动去碰运气。
     // 设置页只有十几个卡片，全部构建的开销可以忽略。
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 32),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 128),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

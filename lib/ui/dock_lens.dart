@@ -6,7 +6,7 @@ import 'package:flutter/scheduler.dart';
 
 /// 加载 `shaders/dock_lens.frag`。
 ///
-/// 和 `GlassOptics`（折射滤镜）是两套独立的东西：这里拿到的
+/// 和 `glass_render.dart`（面板采样）是两套独立的东西：这里拿到的
 /// [ui.FragmentShader] 不做 `ImageFilter`，而是直接当 `Paint.shader` 用，
 /// 由我们自己把「胶囊那排图标的截图」喂进去，做真正的放大 + 弯折 + 色散。
 class DockLensProgram {

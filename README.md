@@ -181,8 +181,9 @@ lib/
     ble_controller.dart     扫描 / 连接 / GATT 选择（universal_ble）
   state/session.dart        应用状态与偏好
   ui/                       四个页面 + 主题 + 通用组件
-    glass.dart              液态玻璃：面板 / 玻璃按钮 / 色光背景 / 底部胶囊 / 分页转场
-    glass_optics.dart       折射着色器的加载与 uniform 绑定（Impeller 专用，失败自动回退）
+    glass.dart              液态玻璃：面板 / 玻璃按钮 / 色光背景 / 底部胶囊 / 分页容器
+    glass_render.dart       渲染层：共享纹理截取（GlassCapture）+ 面板画笔 + 着色器加载
+    dock_lens.dart          底部胶囊的透镜：抓一排图标、放大 / 弯折 / 色散
   i18n/l10n.dart            中英文案
 test/                       帧编解码与读取流程的单元测试
 tool/
@@ -190,7 +191,8 @@ tool/
   make_icons.py             生成 PNG / ICO 图标
   decode_btsnoop.py         Android HCI 抓包解码器
 shaders/
-  glass_refraction.frag     玻璃折射：圆角剖面偏移 + 色散 + 镜面 + 触摸光
+  glass_pane.frag           面板：从共享纹理采样（磨砂 + 折射 + 色散 + 双层镜面）
+  dock_lens.frag            底部透镜：采样胶囊自己那一排图标
 docs/PROTOCOL.md            协议笔记（含 2026-11-08 真机抓包结论）
 docs/CAPTURE.md             抓包手册：已确认命令与抓包方法
 ```

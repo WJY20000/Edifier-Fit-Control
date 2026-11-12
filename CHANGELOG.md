@@ -1,5 +1,46 @@
 # 更新记录
 
+## 0.8.18 — 2026-10-19
+
+### 重写渲染层：不再让引擎替我们截背景
+
+0.8.11–0.8.17 的所有毛病（切页闪屏、顶栏闪、灰带、串页模糊、
+「玻璃里没有东西」）都来自同一个决定：用 `BackdropFilter` /
+`ImageFilter.shader`，也就是**让引擎给每一块玻璃各自截一次背景**。
+什么时候截、截到哪一帧、图层什么时候重建，全都不归我们管。
+
+这一版按 FlClash 的做法重写：
+
+- **我们自己截**：`GlassCapture` 把背景层和页面内容各截成**一张**纹理
+  （`RepaintBoundary.toImageSync`，在 post-frame 里做），
+  所有玻璃从同一张纹理里按自己的屏幕位置取像素。
+  玻璃再多也只截一两次，不再「每块玻璃背后一个滤镜层」；
+- **我们自己采样**：新增 `shaders/glass_pane.frag`，由 `Paint.shader` 驱动。
+  12 tap 黄金角磨砂、圆角 SDF 法线折射、红/蓝色散、双层镜面、
+  边缘暗线、底部内阴影，全部在着色器里做；
+- 纹理或着色器还没就绪时走**纯色渐变兜底**，不留白洞、不闪；
+- 纹理换了只触发 `CustomPainter` 重画（`ValueNotifier`），**不重建 widget**；
+- 面板位置在**绘制时**用 `localToGlobal` 量，滚动 / 切页 / 换肤都不用重建。
+
+全项目 `BackdropFilter` 已归零（`verify.py` 里加了硬性检查，
+`ImageFilter` 也一并禁止）。
+
+### 顺手修掉的三处
+
+- **四个页面叠在一起**：0.8.17 为了保住 `BackdropFilter` 的图层，
+  把四页全画在同一个 `Stack` 里 —— 页面会互相透出来。
+  新架构不需要这样了，改回 `IndexedStack`（保留 State，只画当前页）；
+- **顶栏采样错了层**：body 并没有延伸到 `AppBar` 下面，
+  顶栏采内容纹理只会钳到第一行像素。现在顶栏采背景纹理；
+- **内边距没进玻璃**：`GlassSurface` 的 `padding` 原来加在玻璃层外面，
+  内边距那一条是透明的；现在挪到染色层内部。
+
+### 删掉的东西
+
+- `lib/ui/glass_optics.dart`（`ImageFilter.shader` 那套）；
+- `shaders/glass_refraction.frag`（给滤镜用的整层坐标版本）；
+- `GlassBarVeil` 的 State（没有滤镜要缓存了）。
+
 ## 0.8.17 — 2026-10-19
 
 ### 闪屏：这次是从「切页把玻璃摘出绘制树」这个根上修

@@ -50,7 +50,7 @@ class DevicePage extends StatelessWidget {
         final wide = constraints.maxWidth >= 980;
         if (!wide) {
           return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 128),
             children: [
               hero,
               if (notice != null) ...[const SizedBox(height: 14), notice],
@@ -122,7 +122,7 @@ class _ConnectingView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 128),
       children: const [
         SkeletonBox(height: 150, radius: FitRadius.hero),
         SizedBox(height: 16),

@@ -1,7 +1,7 @@
 name: edifier_fit
 description: Cross-platform control panel for EDIFIER Fit900NB Turbo (Windows + Android).
 publish_to: "none"
-version: 0.8.17+27
+version: 0.8.18+28
 
 environment:
   sdk: ">=3.6.0 <4.0.0"
@@ -23,8 +23,9 @@ flutter:
   uses-material-design: true
   # 折射着色器：由 flutter 工具在构建时编译成 .iplr 并打进资源。
   shaders:
-    - shaders/glass_refraction.frag
-    # 底部胶囊的透镜（当 Paint.shader 用，不是 ImageFilter）
+    # 面板：从 GlassCapture 截下来的纹理里采样（折射 + 磨砂 + 镜面）
+    - shaders/glass_pane.frag
+    # 底部胶囊的透镜（采样胶囊自己那一排图标）
     - shaders/dock_lens.frag
   assets:
     - assets/branding/avatar.jpg
