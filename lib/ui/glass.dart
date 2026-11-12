@@ -363,28 +363,35 @@ class _RenderGlassMetrics extends RenderProxyBox {
   void performLayout() {
     super.performLayout();
     final current = size;
-    if (_reported == current || !current.isFinite) return;
+    if (!current.isFinite) return;
+    // 布局阶段就把原点量出来：切到这一页的**第一帧**就能用对坐标，
+    // 不会出现「先按磨砂画一帧、下一帧才折射」的跳变。
+    _reportOrigin(force: false);
+    if (_reported == current) return;
     _reported = current;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       onSize(current);
     });
   }
 
-  @override
-  void paint(PaintingContext context, Offset offset) {
-    super.paint(context, offset);
-    // 原点要在**绘制**时读：滚动不会触发布局，但玻璃在层里的位置变了。
-    // 取整到 dp，避免亚像素抖动导致每帧都重建滤镜。
+  /// 把当前全局位置报上去（2 dp 以内不报，滚动时能省一半重建）。
+  void _reportOrigin({required bool force}) {
     final at = localToGlobal(Offset.zero);
     final origin = Offset(at.dx.roundToDouble(), at.dy.roundToDouble());
     final last = _reportedOrigin;
-    // 变化不到 2 dp 就不重建：1 dp 的偏差在折射里看不出来，
-    // 但滚动时能让每块玻璃少一半的滤镜重建。
-    if (last != null && (origin - last).distance < 2) return;
+    if (!force && last != null && (origin - last).distance < 2) return;
+    if (last == origin) return;
     _reportedOrigin = origin;
     SchedulerBinding.instance.addPostFrameCallback((_) {
       onOrigin(origin);
     });
+  }
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
+    // 滚动不触发布局，但玻璃在层里的位置变了 —— 所以绘制时再补一次。
+    _reportOrigin(force: false);
   }
 }
 
@@ -531,10 +538,33 @@ class _GlassPressScaleState extends State<GlassPressScale> {
 
 /// 顶栏的磨砂底：和 [GlassSurface] 同源，但没有圆角和阴影，
 /// 用来铺满 [AppBar.flexibleSpace]。
-class GlassBarVeil extends StatelessWidget {
+///
+/// 必须是 Stateful 且缓存滤镜：`AppBar` 在每次切页、每次 session 通知时都会
+/// 重建，如果每次 build 都 `ui.ImageFilter.blur(...)` 造一个新对象，
+/// `BackdropFilter` 会认为滤镜变了 → 重新截取背景 → 顶栏闪一下。
+/// 缓存成同一个实例后，重建只是重建 widget，滤镜层原地不动。
+class GlassBarVeil extends StatefulWidget {
   const GlassBarVeil({super.key, this.blur = GlassBlur.bar});
 
   final double blur;
+
+  @override
+  State<GlassBarVeil> createState() => _GlassBarVeilState();
+}
+
+class _GlassBarVeilState extends State<GlassBarVeil> {
+  ui.ImageFilter? _filter;
+  double? _cachedFor;
+
+  ui.ImageFilter get _cachedFilter {
+    final cached = _filter;
+    if (cached != null && _cachedFor == widget.blur) return cached;
+    final filter =
+        ui.ImageFilter.blur(sigmaX: widget.blur, sigmaY: widget.blur);
+    _filter = filter;
+    _cachedFor = widget.blur;
+    return filter;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -542,7 +572,7 @@ class GlassBarVeil extends StatelessWidget {
     final tint = dark ? const Color(0xFF0B0F14) : const Color(0xFFF7F8FB);
     return ClipRect(
       child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        filter: _cachedFilter,
         child: DecoratedBox(
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -608,10 +638,11 @@ class _GlassBackdropState extends State<GlassBackdrop>
   /// 上一次真正重画的时间点（毫秒）。
   int _lastPaint = -1000;
 
-  /// 重画间隔。36 秒走完一圈，200 ms 一次的位移只有零点几像素；
-  /// 但背景一变，压在它上面的**每一块玻璃**都要重新模糊，
-  /// 所以这里宁可再慢一点（5 fps）。
-  static const int _paintIntervalMs = 200;
+  /// 重画间隔。36 秒走完一圈，280 ms 一次的位移只有零点几像素；
+  /// 但背景一变，压在它上面的**每一块玻璃**都要重新模糊。
+  /// 0.8.17 起四个页面都常驻绘制（见 [LiquidPageView]），所以这里再放慢一档
+  /// （约 3.6 fps），把「不闪」的代价压回去。
+  static const int _paintIntervalMs = 280;
 
   int get _nowMs => (_controller.value * 36000).round();
 
@@ -1497,20 +1528,31 @@ class LiquidPageView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 不能给「玻璃页面」做透明度动画：AnimatedOpacity 会开一个 saveLayer，
-    // 两个页面同时存在时每块玻璃的 BackdropFilter 会把**另一个页面**也
-    // 一起模糊进去，切换的一瞬间整屏发白 —— 也就是用户看到的闪屏。
-    // 这里只让当前页参与绘制，其余 Offstage（不 paint、不占 GPU），
-    // 切换是瞬时的，但不会再闪；ticker 也一起停掉，后台页不烧电。
+    // 这里踩过两次坑，最后是「四条都留着，只是不许动」：
+    //
+    // 1. 不能用 AnimatedOpacity 交叉淡入：透明度会给整页开 saveLayer，
+    //    两页同时存在时，每块玻璃的 BackdropFilter 会把另一页也模糊进去，
+    //    切换瞬间整屏发白；
+    // 2. 也不能用 Offstage：它会把页面**从绘制树里摘掉**。再切回来时，
+    //    这一页上所有 BackdropFilter 都是新插进去的，引擎要在那一帧重新
+    //    截取背景 —— 截不到就是一次「闪」。
+    //
+    // 所以：所有页面一直参与绘制（BackdropFilter 永远是热的、不重建），
+    // 非当前页只是不能被点、不进无障碍树、ticker 停掉。
+    // 代价是背景动画（约 3.6 fps）会让四页的玻璃都重新模糊一次；
+    // 空闲时没有帧，实际开销只在背景变化的那几次/秒。
     return Stack(
       fit: StackFit.expand,
       children: [
         for (var i = 0; i < children.length; i++)
-          Offstage(
-            offstage: i != index,
-            child: TickerMode(
-              enabled: i == index,
-              child: children[i],
+          IgnorePointer(
+            ignoring: i != index,
+            child: ExcludeSemantics(
+              excluding: i != index,
+              child: TickerMode(
+                enabled: i == index,
+                child: children[i],
+              ),
             ),
           ),
       ],

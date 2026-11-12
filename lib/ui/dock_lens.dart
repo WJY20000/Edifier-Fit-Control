@@ -120,7 +120,12 @@ class _DockLensContentState extends State<DockLensContent> {
   static const double _captureScale = 3.0;
 
   /// 两次抓图的最小间隔。
-  static const int _minGapMs = 33;
+  ///
+  /// 抓图会**同步光栅化**（`toImageSync`）并换掉一张纹理，拖拽时每帧都抓
+  /// 既卡又容易闪。所以这里不是在「动的时候抓」，而是「停下来抓」：
+  /// 拖动途中一直用上一张纹理（图标本身没动，只是 uSource 在变，画面依然对），
+  /// 停稳后再补一张最新的（选中态、图标切换都会在这时更新）。
+  static const int _minGapMs = 180;
 
   ui.FragmentShader? _shader;
   ui.Image? _image;
@@ -144,12 +149,30 @@ class _DockLensContentState extends State<DockLensContent> {
     _scheduleCapture();
   }
 
+  bool _settlePending = false;
+
   @override
   void didUpdateWidget(DockLensContent oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 透镜动了才需要重新抓图（图标本身没变）。
-    if (oldWidget.rect != widget.rect) _scheduleCapture();
+    if (oldWidget.rect == widget.rect) return;
+    // 还在动：只记一笔，等停下来再抓。
+    if (_settlePending) return;
+    _settlePending = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _settlePending = false;
+      if (!mounted) return;
+      // 一帧之后位置没再变 → 认为停稳了。
+      if (_settledRect == widget.rect) return;
+      _settledRect = widget.rect;
+      Future<void>.delayed(const Duration(milliseconds: 120), () {
+        if (!mounted) return;
+        if (_settledRect != widget.rect) return; // 又动了，这一轮作废
+        _scheduleCapture();
+      });
+    });
   }
+
+  Rect? _settledRect;
 
   @override
   void dispose() {
@@ -175,8 +198,7 @@ class _DockLensContentState extends State<DockLensContent> {
     if (!mounted) return;
     final now = DateTime.now().millisecondsSinceEpoch;
     if (now - _lastCaptureMs < _minGapMs) {
-      // 动画还在跑，下一帧再来；静止后就不会再抓了。
-      _scheduleCapture();
+      // 刚抓过：这一轮直接跳过（不排队），等下次停稳再说。
       return;
     }
     final object = widget.sourceKey.currentContext?.findRenderObject();
