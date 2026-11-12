@@ -313,11 +313,13 @@ class _HomeShellState extends State<HomeShell> {
                   : SafeArea(
                       top: false,
                       bottom: false,
-                      // 整页内容截成一张纹理：顶栏与底部胶囊从这里采样。
+                      // 整页内容截成一张纹理：底部胶囊从这里采样。
                       // 只包 body（不含胶囊本身）—— 没有自我采样。
+                      // 每 3 帧最多截一次：60 fps 下 20 Hz，肉眼追不上，
+                      // 但同步光栅化的开销少了三分之一。
                       child: GlassCapture(
                         kind: GlassSourceKind.content,
-                        interval: 2,
+                        interval: 3,
                         child: body,
                       ),
                     ),

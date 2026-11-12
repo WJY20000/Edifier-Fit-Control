@@ -57,6 +57,8 @@ vec4 tap(vec2 dp) {
 
 /// 12 个样本的黄金角圆盘：纹理是清晰的，磨砂在这里做。
 vec4 frosted(vec2 dp, float radiusDp) {
+  // 半径为 0 时 12 个样本落在同一点：直接返回，省 11 次采样。
+  if (radiusDp < 0.01) return tap(dp);
   vec4 sum = tap(dp);
   float weight = 1.0;
   for (int i = 0; i < 12; i++) {

@@ -166,33 +166,37 @@ class _GlassSurfaceState extends State<GlassSurface> {
 
     final depth = widget.refraction ??
         (widget.blur * 0.55).clamp(4.0, 12.0).toDouble();
+    // 磨砂和折射都是 0：没有东西要采样，玻璃层就是一层「清晰的背景拷贝」，
+    // 既多一次纹理采样又没有观感收益 —— 直接省掉（扫描页列表项就是这种）。
+    final realGlass = widget.blur > 0 || depth > 0;
 
     Widget surface = Stack(
       key: _paneKey,
       children: [
         // 1. 玻璃底：从共享纹理里采样（折射 + 磨砂 + 镜面），永远在内容和染色下面。
-        Positioned.fill(
-          child: IgnorePointer(
-            child: ClipRRect(
-              borderRadius: shape,
-              child: GlassPaneMotionRepaint(
-                child: CustomPaint(
-                  painter: GlassPanePainter(
-                    target: _paneKey,
-                    source: widget.source,
-                    radius: widget.radius,
-                    refraction: widget.blur <= 0 && depth == 0 ? 0 : depth,
-                    frost: widget.blur,
-                    tint: base,
-                    dark: dark,
-                    brightness: dark ? 1.04 : 1.02,
-                    shaderProvider: () => _shader,
+        if (realGlass)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ClipRRect(
+                borderRadius: shape,
+                child: GlassPaneMotionRepaint(
+                  child: CustomPaint(
+                    painter: GlassPanePainter(
+                      target: _paneKey,
+                      source: widget.source,
+                      radius: widget.radius,
+                      refraction: depth,
+                      frost: widget.blur,
+                      tint: base,
+                      dark: dark,
+                      brightness: dark ? 1.04 : 1.02,
+                      shaderProvider: () => _shader,
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
         // 2. 染色 + 内容
         ClipRRect(
           borderRadius: shape,
@@ -497,7 +501,7 @@ class _GlassBackdropState extends State<GlassBackdrop>
         // 只包背景（不含页面内容）—— 所以卡片永远不会采样到卡片，没有反馈。
         GlassCapture(
           kind: GlassSourceKind.backdrop,
-          interval: 8,
+          interval: 4,
           child: Stack(
             fit: StackFit.expand,
             children: [
@@ -521,43 +525,44 @@ class _GlassBackdropState extends State<GlassBackdrop>
                       math.sin((t + phase) * 2 * math.pi);
                   // 三团色光和反光/暗角合成一个 CustomPaint：原来是 4 个全屏图层，
                   // 每层都要单独合成一次；合成后少 3 层，也少 3 次重绘调度。
-                  return RepaintBoundary(
-                    child: CustomPaint(
-                      painter: _BackdropPainter(
-                        progress: t,
-                        dark: dark,
-                        glows: [
-                          (
-                            center: Offset(
-                              w * 0.46 + drift(0.0) * w * 0.05 + w * 0.475,
-                              -h * 0.18 + drift(0.25) * h * 0.04 + w * 0.475,
-                            ),
-                            radius: w * 0.475,
-                            color: FitColors.accent,
-                            alpha: dark ? 0.26 : 0.20,
+                  // 这里**不能**再套 RepaintBoundary：
+                  // 采集边界（GlassCapture）要靠子树重绘来知道「背景变了」，
+                  // 中间隔一层边界，外面就永远收不到通知，纹理停在第 1 帧。
+                  return CustomPaint(
+                    painter: _BackdropPainter(
+                      progress: t,
+                      dark: dark,
+                      glows: [
+                        (
+                          center: Offset(
+                            w * 0.46 + drift(0.0) * w * 0.05 + w * 0.475,
+                            -h * 0.18 + drift(0.25) * h * 0.04 + w * 0.475,
                           ),
-                          (
-                            center: Offset(
-                              -w * 0.40 + drift(0.5) * w * 0.05 + w * 0.44,
-                              h * 0.34 + drift(0.75) * h * 0.04 + w * 0.44,
-                            ),
-                            radius: w * 0.44,
-                            color: FitColors.accentLight,
-                            alpha: dark ? 0.14 : 0.12,
+                          radius: w * 0.475,
+                          color: FitColors.accent,
+                          alpha: dark ? 0.26 : 0.20,
+                        ),
+                        (
+                          center: Offset(
+                            -w * 0.40 + drift(0.5) * w * 0.05 + w * 0.44,
+                            h * 0.34 + drift(0.75) * h * 0.04 + w * 0.44,
                           ),
-                          (
-                            center: Offset(
-                              w * 0.08 + drift(0.2) * w * 0.04 + w * 0.36,
-                              h * 0.70 + drift(0.6) * h * 0.04 + w * 0.36,
-                            ),
-                            radius: w * 0.36,
-                            color: FitColors.gold,
-                            alpha: dark ? 0.07 : 0.10,
+                          radius: w * 0.44,
+                          color: FitColors.accentLight,
+                          alpha: dark ? 0.14 : 0.12,
+                        ),
+                        (
+                          center: Offset(
+                            w * 0.08 + drift(0.2) * w * 0.04 + w * 0.36,
+                            h * 0.70 + drift(0.6) * h * 0.04 + w * 0.36,
                           ),
-                        ],
-                      ),
-                      child: const SizedBox.expand(),
+                          radius: w * 0.36,
+                          color: FitColors.gold,
+                          alpha: dark ? 0.07 : 0.10,
+                        ),
+                      ],
                     ),
+                    child: const SizedBox.expand(),
                   );
                 },
               ),
@@ -575,7 +580,7 @@ typedef _Glow = ({Offset center, double radius, Color color, double alpha});
 
 /// 背景：三团色光 + 斜向反光 + 暗角，一个 painter 画完。
 ///
-/// 合成一层是为了省重绘：背景每 200 ms 变一次，纹理每 8 帧重截一次，
+/// 合成一层是为了省重绘：背景每 200 ms 变一次，纹理每 4 帧重截一次，
 /// 图层越少、合成越轻。
 class _BackdropPainter extends CustomPainter {
   const _BackdropPainter({

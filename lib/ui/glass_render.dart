@@ -147,6 +147,13 @@ class _GlassCaptureState extends State<GlassCapture> {
   int _frame = 0;
   bool _scheduled = false;
 
+  /// 子树自上次截图之后有没有重画过。
+  ///
+  /// 这个标志是必须的：截图 → 发布新纹理 → 所有玻璃重画 → 排下一帧 →
+  /// 又截图……如果没有它，界面即使完全静止也会以 `interval` 的节奏
+  /// 一直产帧（每秒 30 次同步光栅化 + 几十 MB 的纹理分配）。
+  bool _dirty = true;
+
   @override
   void initState() {
     super.initState();
@@ -155,10 +162,16 @@ class _GlassCaptureState extends State<GlassCapture> {
 
   @override
   void dispose() {
+    // 先把发布出去的纹理摘掉：否则别处还挂着的玻璃会去采样一张已经释放的图。
+    final store = GlassTextures.of(widget.kind);
+    if (identical(store.value, _current)) store.value = null;
     _current?.image.dispose();
     _current = null;
     super.dispose();
   }
+
+  /// 由 [_CaptureWatcher] 在子树绘制时调用（绘制阶段，不能 setState）。
+  void _markDirty() => _dirty = true;
 
   void _schedule() {
     if (_scheduled) return;
@@ -171,10 +184,14 @@ class _GlassCaptureState extends State<GlassCapture> {
 
   void _tick() {
     if (!mounted) return;
-    // 先排下一帧：即使这一帧不截，也要保证界面动起来之后还能继续截。
+    // 只把「下一个 post-frame」重新排上，本身**不会**产生帧：
+    // 没有帧的时候它就静静等着，有帧的时候才轮到它判断要不要截。
     _schedule();
     _frame++;
-    if (_frame % widget.interval != 0) return;
+    // 没变化就不截 —— 这一条是「界面静止时不烧电」的关键。
+    if (!_dirty) return;
+    // 还没有纹理时必须马上截一张，不能等 interval。
+    if (_generation > 0 && _frame % widget.interval != 0) return;
 
     final object = _key.currentContext?.findRenderObject();
     if (object is! RenderRepaintBoundary) return;
@@ -187,8 +204,10 @@ class _GlassCaptureState extends State<GlassCapture> {
       image = object.toImageSync(pixelRatio: dpr);
     } catch (_) {
       // 软件渲染 / 测试环境拿不到图：保持上一张，没有就退回纯色。
+      // 不清 dirty：下一帧再试一次，成功为止。
       return;
     }
+    _dirty = false;
 
     final texture = GlassTexture(
       image: image,
@@ -209,7 +228,46 @@ class _GlassCaptureState extends State<GlassCapture> {
 
   @override
   Widget build(BuildContext context) {
-    return RepaintBoundary(key: _key, child: widget.child);
+    // 重建（换主题、换语言）也算一次变化。
+    _dirty = true;
+    return RepaintBoundary(
+      key: _key,
+      child: _CaptureWatcher(onPaint: _markDirty, child: widget.child),
+    );
+  }
+}
+
+/// 贴在采集子树最外层：子树只要重画一次，就把 [GlassCapture] 标脏。
+///
+/// 为什么要单独一个 render object：`RepaintBoundary` 会把重绘隔在自己内部，
+/// 外面的 widget 根本不知道里面动过没有。
+class _CaptureWatcher extends SingleChildRenderObjectWidget {
+  const _CaptureWatcher({required this.onPaint, required Widget super.child});
+
+  final VoidCallback onPaint;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) =>
+      _RenderCaptureWatcher(onPaint);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderCaptureWatcher renderObject,
+  ) {
+    renderObject.onPaint = onPaint;
+  }
+}
+
+class _RenderCaptureWatcher extends RenderProxyBox {
+  _RenderCaptureWatcher(this.onPaint);
+
+  VoidCallback onPaint;
+
+  @override
+  void paint(PaintingContext context, Offset offset) {
+    super.paint(context, offset);
+    onPaint();
   }
 }
 
